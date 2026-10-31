@@ -1,0 +1,11 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- vinyl record -->
+    <path android:fillColor="#FF1ED760" android:fillType="evenOdd"
+        android:pathData="M26,54a28,28 0 1,0 56,0a28,28 0 1,0 -56,0z M44,54a10,10 0 1,0 20,0a10,10 0 1,0 -20,0z" />
+    <path android:fillColor="#FF121212" android:fillType="evenOdd"
+        android:pathData="M32,54a22,22 0 1,0 44,0a22,22 0 1,0 -44,0z M33.5,54a20.5,20.5 0 1,0 41,0a20.5,20.5 0 1,0 -41,0z" />
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M51.5,54a2.5,2.5 0 1,0 5,0a2.5,2.5 0 1,0 -5,0z" />
+</vector>
