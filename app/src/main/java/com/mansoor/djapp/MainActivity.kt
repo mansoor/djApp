@@ -10,6 +10,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        if (savedInstanceState == null) AppState.checkLastProblem(this)
         handleIntent(intent)
         setContent { DjAppUi(this) }
     }

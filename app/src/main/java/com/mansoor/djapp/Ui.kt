@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -113,11 +114,35 @@ private val DjColors = darkColorScheme(
 @Composable
 fun DjAppUi(activity: ComponentActivity) {
     val loggedIn by AppState.loggedIn.collectAsState()
+    val report by AppState.problemReport.collectAsState()
     MaterialTheme(colorScheme = DjColors) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             if (!loggedIn) SetupScreen() else MainScreen(activity)
         }
+        report?.let { ProblemDialog(it) }
     }
+}
+
+@Composable
+private fun ProblemDialog(report: String) {
+    val clipboard = LocalClipboardManager.current
+    AlertDialog(
+        onDismissRequest = { AppState.problemReport.value = null },
+        title = { Text("DJ Mix had a problem last time") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("Please copy this and send it to the developer.", style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.height(8.dp))
+                Text(report, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelSmall)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { clipboard.setText(AnnotatedString(report)) }) { Text("Copy") }
+        },
+        dismissButton = {
+            TextButton(onClick = { AppState.problemReport.value = null }) { Text("Close") }
+        },
+    )
 }
 
 // ------------------------------------------------------------------ setup

@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 /**
@@ -57,6 +58,8 @@ object DjEngine {
     private var connecting = false
     private var connectAttempt = 0
     private var connectStartedAt = 0L
+    private var lastAttemptShowedAuth = false
+    private var authViewNeeded = false
     private var reconnectAttempts = 0
 
     private var sources: List<Pair<PlaylistInfo, List<TrackInfo>?>> = emptyList()
@@ -104,7 +107,7 @@ object DjEngine {
      * Connects to the Spotify app. A connect that hasn't answered within a few seconds
      * (e.g. Spotify was asleep) is abandoned and a fresh one started when called again.
      */
-    fun connect(ctx: Context, showAuth: Boolean = true) {
+    fun connect(ctx: Context, showAuth: Boolean = !SpotifyAuth.hasRemoteScope() || authViewNeeded) {
         if (remote?.isConnected == true) return
         if (connecting && SystemClock.elapsedRealtime() - connectStartedAt < 5000) return
         val cid = Prefs.clientId
@@ -115,6 +118,7 @@ object DjEngine {
             return
         }
         val attempt = ++connectAttempt
+        lastAttemptShowedAuth = showAuth
         connecting = true
         connectStartedAt = SystemClock.elapsedRealtime()
         error = null
@@ -170,6 +174,14 @@ object DjEngine {
     private fun onConnectionFailed(t: Throwable) {
         connecting = false
         remote = null
+        val n = t.javaClass.simpleName
+        if (!lastAttemptShowedAuth && (n.contains("UserNotAuthorized") || n.contains("AuthenticationFailed"))) {
+            // The web login grant wasn't enough: fall back to Spotify's own approval screen.
+            authViewNeeded = true
+            error = "Spotify needs you to approve DJ Mix in the Spotify app. Tap Connect, then Agree."
+            publish()
+            return
+        }
         error = describe(t)
         publish()
         if (running && reconnectAttempts < 5) {
@@ -219,7 +231,8 @@ object DjEngine {
                         null
                     }
                 }
-                val q = MixBuilder.build(loaded, settings)
+                val s = settings
+                val q = withContext(Dispatchers.Default) { MixBuilder.build(loaded, s) }
                 if (q.isEmpty()) {
                     error = "Those playlists have no playable tracks."
                     return@launch
@@ -453,7 +466,7 @@ object DjEngine {
         }
         index = jumpTo ?: (index + 1)
         if (index >= queue.size) {
-            queue = MixBuilder.build(sources, settings)
+            queue = withContext(Dispatchers.Default) { MixBuilder.build(sources, settings) }
             status = "Starting a fresh round"
             index = 0
         }

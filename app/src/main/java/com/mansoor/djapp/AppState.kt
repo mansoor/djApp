@@ -9,6 +9,7 @@ import kotlinx.coroutines.launch
 class DjApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        Diagnostics.install(this)
         Prefs.init(this)
         DjEngine.init(this)
     }
@@ -24,6 +25,17 @@ object AppState {
     val selected = MutableStateFlow(Prefs.selected)
     val settings = MutableStateFlow(Prefs.settings)
     val message = MutableStateFlow<String?>(null)
+    val problemReport = MutableStateFlow<String?>(null)
+
+    fun checkLastProblem(ctx: android.content.Context) {
+        val app = ctx.applicationContext
+        scope.launch {
+            val report = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                Diagnostics.takeLastProblem(app)
+            }
+            if (report != null) problemReport.value = report
+        }
+    }
 
     fun handleRedirect(uri: Uri) {
         scope.launch {

@@ -139,7 +139,9 @@ object SpotifyApi {
             val (code, text) = withContext(Dispatchers.IO) {
                 Http.request("GET", url, mapOf("Authorization" to "Bearer $token"))
             }
-            if (code in 200..299) return if (text.isBlank()) JSONObject() else JSONObject(text)
+            if (code in 200..299) {
+                return withContext(Dispatchers.Default) { if (text.isBlank()) JSONObject() else JSONObject(text) }
+            }
             if (code == 401 && attempt == 0) {
                 token = SpotifyAuth.accessToken(forceRefresh = true)
             } else if (code == 429 || code >= 500) {
