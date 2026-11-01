@@ -325,6 +325,7 @@ private fun LibraryScreen(
 @Composable
 private fun ConnectionBanner(activity: ComponentActivity, engine: DjEngine.State) {
     if (engine.connected && engine.error == null) return
+    val needsScope = !SpotifyAuth.hasRemoteScope()
     Card(
         Modifier.fillMaxWidth().padding(12.dp),
         colors = CardDefaults.cardColors(containerColor = Color(0xFF3A2A12)),
@@ -332,20 +333,53 @@ private fun ConnectionBanner(activity: ComponentActivity, engine: DjEngine.State
         Column(Modifier.padding(12.dp)) {
             Text(
                 when {
+                    engine.connected -> "Spotify"
+                    needsScope -> "One more step: let DJ Mix control the Spotify app"
                     engine.connecting -> "Connecting to the Spotify app…"
-                    !engine.connected -> "Not connected to the Spotify app"
-                    else -> "Spotify"
+                    else -> "Not connected to the Spotify app"
                 },
                 fontWeight = FontWeight.Bold,
             )
+            if (!engine.connected && needsScope) {
+                Text(
+                    "Tap Re-authorize and approve in the browser. This grants playback control.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            } else if (engine.connecting) {
+                Text(
+                    "If a Spotify approval screen appears, tap Agree. Stuck? Tap Open Spotify, then come back.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
             engine.error?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             Row {
                 if (!engine.connected) {
-                    TextButton(onClick = { DjEngine.connect(activity) }, enabled = !engine.connecting) { Text("Connect") }
+                    if (needsScope) {
+                        Button(onClick = { reauthorize(activity) }) { Text("Re-authorize") }
+                    } else {
+                        TextButton(onClick = { DjEngine.connect(activity) }) { Text("Connect") }
+                    }
+                    TextButton(onClick = { openSpotify(activity) }) { Text("Open Spotify") }
+                    if (!needsScope) TextButton(onClick = { reauthorize(activity) }) { Text("Re-authorize") }
                 }
-                if (engine.error != null) TextButton(onClick = { DjEngine.clearError() }) { Text("Dismiss") }
+                if (engine.error != null && engine.connected) TextButton(onClick = { DjEngine.clearError() }) { Text("Dismiss") }
             }
         }
+    }
+}
+
+private fun reauthorize(activity: ComponentActivity) {
+    activity.startActivity(Intent(Intent.ACTION_VIEW, SpotifyAuth.authUri()))
+}
+
+/** Brings Spotify to the foreground so it can wake up / show its approval screen. */
+private fun openSpotify(activity: ComponentActivity) {
+    val launch = activity.packageManager.getLaunchIntentForPackage("com.spotify.music")
+        ?: Intent(Intent.ACTION_VIEW, android.net.Uri.parse("spotify:"))
+    try {
+        activity.startActivity(launch)
+    } catch (e: Exception) {
+        AppState.message.value = "Couldn't open Spotify: ${e.message}"
     }
 }
 

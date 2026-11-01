@@ -55,6 +55,8 @@ object DjEngine {
 
     private var remote: SpotifyAppRemote? = null
     private var connecting = false
+    private var connectAttempt = 0
+    private var connectStartedAt = 0L
     private var reconnectAttempts = 0
 
     private var sources: List<Pair<PlaylistInfo, List<TrackInfo>?>> = emptyList()
@@ -98,11 +100,23 @@ object DjEngine {
 
     // ---------------------------------------------------------------- connection
 
+    /**
+     * Connects to the Spotify app. A connect that hasn't answered within a few seconds
+     * (e.g. Spotify was asleep) is abandoned and a fresh one started when called again.
+     */
     fun connect(ctx: Context, showAuth: Boolean = true) {
-        if (remote?.isConnected == true || connecting) return
+        if (remote?.isConnected == true) return
+        if (connecting && SystemClock.elapsedRealtime() - connectStartedAt < 5000) return
         val cid = Prefs.clientId
         if (cid.isBlank()) return
+        if (!SpotifyAppRemote.isSpotifyInstalled(ctx)) {
+            error = "The Spotify app isn't installed on this phone."
+            publish()
+            return
+        }
+        val attempt = ++connectAttempt
         connecting = true
+        connectStartedAt = SystemClock.elapsedRealtime()
         error = null
         publish()
         val params = ConnectionParams.Builder(cid)
@@ -115,12 +129,27 @@ object DjEngine {
             }
 
             override fun onFailure(t: Throwable) {
-                scope.launch { onConnectionFailed(t) }
+                scope.launch { if (attempt == connectAttempt || remote != null) onConnectionFailed(t) }
             }
         })
+        scope.launch {
+            delay(20_000)
+            if (attempt == connectAttempt && connecting && remote?.isConnected != true) {
+                connecting = false
+                error = "The Spotify app didn't answer. Tap \"Open Spotify\", play any song for a moment, " +
+                    "come back here and tap Connect. If it still hangs, tap \"Re-authorize\"."
+                publish()
+            }
+        }
     }
 
     private fun onConnected(r: SpotifyAppRemote) {
+        val existing = remote
+        if (existing != null && existing !== r && existing.isConnected) {
+            // A late answer from an abandoned attempt.
+            SpotifyAppRemote.disconnect(r)
+            return
+        }
         connecting = false
         reconnectAttempts = 0
         remote = r
@@ -162,7 +191,7 @@ object DjEngine {
                     "(${SpotifyAuth.REDIRECT_URI}), package name and SHA1 from the setup screen. (${t.message})"
             n.contains("Offline") -> "Spotify is in offline mode."
             n.contains("Terminated") || n.contains("Disconnected") -> "Lost connection to Spotify. Tap Connect."
-            else -> "Spotify connection failed: ${t.message ?: n}"
+            else -> "Spotify connection failed ($n): ${t.message ?: "no details"}"
         }
     }
 

@@ -40,10 +40,15 @@ object Http {
 /** Authorization Code + PKCE flow (no client secret needed). */
 object SpotifyAuth {
     const val REDIRECT_URI = "djapp://callback"
-    private const val SCOPES = "playlist-read-private playlist-read-collaborative user-library-read"
+    // app-remote-control is granted here so App Remote doesn't need Spotify's own auth
+    // screen, which Android blocks when Spotify is in the background.
+    private const val SCOPES =
+        "playlist-read-private playlist-read-collaborative user-library-read app-remote-control"
     private val mutex = Mutex()
 
     fun isLoggedIn() = Prefs.refreshToken.isNotBlank()
+
+    fun hasRemoteScope() = Prefs.grantedScopes.split(" ").contains("app-remote-control")
 
     fun logout() {
         Prefs.accessToken = ""
@@ -116,6 +121,8 @@ object SpotifyAuth {
         Prefs.tokenExpiry = System.currentTimeMillis() + j.optLong("expires_in", 3600) * 1000 - 60_000
         val refresh = j.optString("refresh_token", "")
         if (refresh.isNotBlank()) Prefs.refreshToken = refresh
+        val scope = j.optString("scope", "")
+        if (scope.isNotBlank()) Prefs.grantedScopes = scope
     }
 }
 

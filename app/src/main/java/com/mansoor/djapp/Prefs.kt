@@ -26,6 +26,9 @@ object Prefs {
     var codeVerifier: String
         get() = str("codeVerifier")
         set(v) = put("codeVerifier", v)
+    var grantedScopes: String
+        get() = str("grantedScopes")
+        set(v) = put("grantedScopes", v)
     var tokenExpiry: Long
         get() = sp.getLong("tokenExpiry", 0)
         set(v) = sp.edit().putLong("tokenExpiry", v).apply()
