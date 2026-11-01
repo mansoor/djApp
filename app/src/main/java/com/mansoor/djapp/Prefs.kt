@@ -62,6 +62,7 @@ object Prefs {
                     maxPlayPct = j.optInt("maxPlayPct", d.maxPlayPct),
                     smartSwitch = j.optBoolean("smartSwitch", d.smartSwitch),
                     crossfadeSec = j.optInt("crossfadeSec", d.crossfadeSec),
+                    loopSec = j.optInt("loopSec", d.loopSec).coerceIn(1, 16),
                 )
             } catch (e: Exception) {
                 MixSettings()
@@ -85,6 +86,7 @@ object Prefs {
                 .put("maxPlayPct", s.maxPlayPct)
                 .put("smartSwitch", s.smartSwitch)
                 .put("crossfadeSec", s.crossfadeSec)
+                .put("loopSec", s.loopSec)
             put("settings", j.toString())
         }
 }

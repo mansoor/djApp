@@ -59,6 +59,7 @@ data class MixSettings(
     val smartSwitch: Boolean = false,
     /** Spotify crossfade length the user set in Spotify; 0 = trust auto-detection. */
     val crossfadeSec: Int = 0,
+    val loopSec: Int = 8,
 )
 
 const val LIKED_ID = "__liked__"

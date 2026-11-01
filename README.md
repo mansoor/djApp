@@ -16,7 +16,7 @@ shuffled or in order, with DJ-style transitions between tracks.
   - Spinning vinyl with the album art as its label. Drag it round like a jog wheel to move through the track.
   - Progress bar with two handles: drag or tap the white playhead to seek, and drag the purple **mix marker**
     to choose when the next song comes in (e.g. move 1:30 to 2:30 to play the song longer). Tap **Auto** to go back.
-  - ±10 s, **Loop** 4/8/16 s, **Repeat** track, "Mix next now", previous.
+  - ±10 s, **Loop** with a 1–16 s length slider (adjustable while looping), **Repeat** track, "Mix next now", previous.
 - **Queue**: see everything coming up, search it, mix into any song now, reorder, remove. Open any playlist
   to **Play** a song now, play it **Next**, or **+Queue** it, even in shuffle mode.
 - **Auto mix**:

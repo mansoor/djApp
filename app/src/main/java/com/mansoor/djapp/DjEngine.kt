@@ -413,14 +413,24 @@ object DjEngine {
         publish()
     }
 
-    fun toggleLoop(lenMs: Long) {
+    /** Loop the next [lenMs] from the current position, or stop looping. */
+    fun setLoop(on: Boolean, lenMs: Long) {
         val dur = lastPs?.track?.duration ?: return
-        if (loopLen == lenMs) {
+        if (!on) {
             loopLen = 0
         } else {
             loopLen = lenMs
             loopStart = estimatedPosition().coerceAtMost(dur - lenMs - 1500).coerceAtLeast(0)
         }
+        publish()
+    }
+
+    /** Change the length of a running loop, keeping where it starts. */
+    fun setLoopLength(lenMs: Long) {
+        val dur = lastPs?.track?.duration ?: return
+        if (loopLen <= 0) return
+        loopLen = lenMs
+        loopStart = loopStart.coerceAtMost(dur - lenMs - 1500).coerceAtLeast(0)
         publish()
     }
 

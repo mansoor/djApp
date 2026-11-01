@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
@@ -46,6 +47,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -80,6 +82,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import kotlin.math.abs
 import kotlin.math.atan2
+import kotlin.math.roundToInt
 
 /** One full turn of the jog wheel moves this much through the track. */
 private const val JOG_MS_PER_TURN = 10_000f
@@ -398,22 +401,42 @@ private fun Transport(engine: DjEngine.State) {
     }
 }
 
+/** Loop length slider (1-16 s) with a Loop on/off pad, plus Repeat track. */
 @Composable
 private fun Pads(engine: DjEngine.State) {
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-        listOf(4000L to "Loop 4s", 8000L to "8s", 16000L to "16s").forEach { (ms, label) ->
+    val settings by AppState.settings.collectAsState()
+    val looping = engine.loopLenMs > 0
+    Column(Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Loop length", style = MaterialTheme.typography.labelMedium, color = Color.LightGray)
+            Slider(
+                value = settings.loopSec.toFloat(),
+                onValueChange = { v ->
+                    val sec = v.roundToInt().coerceIn(1, 16)
+                    if (sec != AppState.settings.value.loopSec) {
+                        AppState.updateSettings(AppState.settings.value.copy(loopSec = sec))
+                        DjEngine.setLoopLength(sec * 1000L)
+                    }
+                },
+                valueRange = 1f..16f,
+                steps = 14,
+                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+            )
+            Text("${settings.loopSec}s", color = Green, fontWeight = FontWeight.Bold, modifier = Modifier.width(32.dp))
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.align(Alignment.CenterHorizontally)) {
             FilterChip(
-                selected = engine.loopLenMs == ms,
-                onClick = { DjEngine.toggleLoop(ms) },
-                label = { Text(label) },
+                selected = looping,
+                onClick = { DjEngine.setLoop(!looping, settings.loopSec * 1000L) },
+                label = { Text(if (looping) "Looping ${engine.loopLenMs / 1000}s" else "Loop ${settings.loopSec}s") },
                 enabled = engine.durationMs > 0,
             )
+            FilterChip(
+                selected = engine.repeatTrack,
+                onClick = { DjEngine.toggleRepeat() },
+                label = { Text("Repeat track") },
+            )
         }
-        FilterChip(
-            selected = engine.repeatTrack,
-            onClick = { DjEngine.toggleRepeat() },
-            label = { Text("Repeat") },
-        )
     }
 }
 
