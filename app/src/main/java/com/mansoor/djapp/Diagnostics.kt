@@ -30,7 +30,7 @@ object Diagnostics {
     fun takeLastProblem(ctx: Context): String? {
         val sp = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         sp.getString("crash", null)?.let {
-            sp.edit().remove("crash").apply()
+            sp.edit().remove("crash").putString("lastReport", it).apply()
             return it
         }
         if (Build.VERSION.SDK_INT < 30) return null
@@ -41,16 +41,28 @@ object Diagnostics {
             if (info.timestamp <= sp.getLong("seenAnr", 0)) return null
             sp.edit().putLong("seenAnr", info.timestamp).apply()
             val trace = info.traceInputStream?.bufferedReader()?.use { it.readText() } ?: ""
-            "App froze (ANR): ${info.description}\n\n" + mainThread(trace)
+            val report = "FROZE. Main thread code:\n" + mainThreadFrames(trace) + "\n\n(${info.description})"
+            sp.edit().putString("lastReport", report).apply()
+            report
         } catch (e: Exception) {
             null
         }
     }
 
-    private fun mainThread(trace: String): String {
+    fun lastReport(ctx: Context): String? =
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("lastReport", null)
+
+    /** Just the stack frames of the main thread, app frames first, so they fit in a screenshot. */
+    private fun mainThreadFrames(trace: String): String {
         val start = trace.indexOf("\"main\"")
-        if (start < 0) return trace.take(4000)
+        if (start < 0) return trace.take(3000)
         val end = trace.indexOf("\n\n", start).let { if (it < 0) trace.length else it }
-        return trace.substring(start, end).lines().take(45).joinToString("\n")
+        val frames = trace.substring(start, end).lines()
+            .map { it.trim() }
+            .filter { it.startsWith("at ") || it.startsWith("- ") }
+            .map { it.removePrefix("at ") }
+        if (frames.isEmpty()) return trace.substring(start, end).take(3000)
+        val ours = frames.filter { it.startsWith("com.mansoor") || it.startsWith("com.spotify") }
+        return (ours.take(12).map { "* $it" } + listOf("--- full ---") + frames.take(30)).joinToString("\n")
     }
 }

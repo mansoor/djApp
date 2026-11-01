@@ -37,6 +37,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.LibraryMusic
@@ -128,7 +129,7 @@ private fun ProblemDialog(report: String) {
     val clipboard = LocalClipboardManager.current
     AlertDialog(
         onDismissRequest = { AppState.problemReport.value = null },
-        title = { Text("DJ Mix had a problem last time") },
+        title = { Text("Problem report") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text("Please copy this and send it to the developer.", style = MaterialTheme.typography.bodySmall)
@@ -292,6 +293,9 @@ private fun LibraryScreen(
             TopAppBar(
                 title = { Text("DJ Mix", fontWeight = FontWeight.Bold) },
                 actions = {
+                    IconButton(onClick = {
+                        AppState.problemReport.value = Diagnostics.lastReport(activity) ?: "No problem recorded yet."
+                    }) { Icon(Icons.Default.BugReport, "Last problem report") }
                     IconButton(onClick = { AppState.refreshPlaylists() }) { Icon(Icons.Default.Refresh, "Refresh") }
                     IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, "Settings") }
                     IconButton(onClick = { AppState.logout() }) { Icon(Icons.AutoMirrored.Filled.Logout, "Log out") }
