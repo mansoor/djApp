@@ -67,6 +67,9 @@ object DjEngine {
     private lateinit var fader: VolumeFader
     private val rnd = Random.Default
 
+    /** How far before Spotify's crossfade window the overlap jump lands. */
+    private const val OVERLAP_LEAD_MS = 6000L
+
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state.asStateFlow()
 
@@ -625,7 +628,9 @@ object DjEngine {
                 return
             }
         }
-        if (pos >= effectiveMix()) trigger()
+        // In overlap mode start early by the lead-in, so the blend itself begins at the marker.
+        val lead = if (settings.style == TransitionStyle.OVERLAP && xfadeMs() > 0) OVERLAP_LEAD_MS else 0L
+        if (pos >= effectiveMix() - lead) trigger()
     }
 
     private fun trigger() {
@@ -677,7 +682,9 @@ object DjEngine {
             publish()
             val base = fader.current()
             try {
-                val target = dur - xf - 300
+                // Land a few seconds before the crossfade window so Spotify reaches it naturally;
+                // jumping straight into the window makes Spotify cut instead of blend.
+                val target = dur - xf - OVERLAP_LEAD_MS
                 if (estimatedPosition() < target - 1500) {
                     val dip = (base * 0.7f).roundToInt()
                     fader.ramp(base, dip, 200)
@@ -685,7 +692,7 @@ object DjEngine {
                     delay(150)
                     fader.ramp(dip, base, 300)
                 }
-                awaitTrack(xf + 6000) { it != null && it != fromUri }
+                awaitTrack(xf + OVERLAP_LEAD_MS + 6000) { it != null && it != fromUri }
                 status = ""
             } finally {
                 fader.set(base)
