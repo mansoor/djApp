@@ -44,10 +44,10 @@ enum class TransitionStyle {
 
 data class MixSettings(
     val mode: PlayMode = PlayMode.SHUFFLE,
-    val style: TransitionStyle = TransitionStyle.OVERLAP,
+    val style: TransitionStyle = TransitionStyle.DJ_FADE,
     val fadeOutSec: Int = 6,
-    val fadeInSec: Int = 3,
-    val floorPct: Int = 15,
+    val fadeInSec: Int = 2,
+    val floorPct: Int = 25,
     val mixOutEarlySec: Int = 0,
     val skipIntroSec: Int = 0,
     val avoidSameArtist: Boolean = true,

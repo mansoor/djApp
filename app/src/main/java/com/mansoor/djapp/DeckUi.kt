@@ -444,8 +444,8 @@ private fun TransitionInfo(engine: DjEngine.State, settings: MixSettings, onOpen
     }
     val style = when (settings.style) {
         TransitionStyle.OVERLAP ->
-            if (engine.crossfadeMs > 0) "Overlap ${engine.crossfadeMs / 1000}s (Spotify crossfade)" else "Overlap (Spotify crossfade)"
-        TransitionStyle.DJ_FADE -> "Dip fade ${settings.fadeOutSec}s out / ${settings.fadeInSec}s in"
+            if (engine.crossfadeMs > 0) "Outro crossfade ${engine.crossfadeMs / 1000}s" else "Outro crossfade"
+        TransitionStyle.DJ_FADE -> "Smooth fade ${settings.fadeOutSec}s out / ${settings.fadeInSec}s in"
     }
     val length = if (settings.randomLength) " · random length ${settings.minPlayPct}-${settings.maxPlayPct}%" else ""
     val mode = when (settings.mode) {

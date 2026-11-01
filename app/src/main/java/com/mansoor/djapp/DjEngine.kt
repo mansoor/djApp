@@ -327,7 +327,7 @@ object DjEngine {
     fun onSettingsChanged() {
         if (!running) return
         if (settings.smartSwitch) startDetector() else stopDetector()
-        if (settings.style == TransitionStyle.OVERLAP) queueNextNative()
+        queueNextNative()
         publish()
     }
 
@@ -847,9 +847,12 @@ object DjEngine {
         }
     }
 
-    /** In overlap mode, keep the next track queued in Spotify so its crossfade can blend into it. */
+    /**
+     * Keep the next track queued in Spotify: overlap mode needs it for the crossfade, and smooth
+     * fades skip into it, which starts faster than playing a new track.
+     */
     private fun queueNextNative() {
-        if (!running || settings.style != TransitionStyle.OVERLAP || nativeQueued != null) return
+        if (!running || nativeQueued != null) return
         val ready = when (val cur = queue.getOrNull(index)) {
             is QueueEntry.Track -> true
             is QueueEntry.Block -> blockPlayed + 1 >= cur.count

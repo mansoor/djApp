@@ -72,21 +72,21 @@ fun SettingsScreen(onBack: () -> Unit) {
             Section("Transition")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
-                    selected = s.style == TransitionStyle.OVERLAP,
-                    onClick = { update(s.copy(style = TransitionStyle.OVERLAP)) },
-                    label = { Text("Overlap (crossfade)") },
-                )
-                FilterChip(
                     selected = s.style == TransitionStyle.DJ_FADE,
                     onClick = { update(s.copy(style = TransitionStyle.DJ_FADE)) },
-                    label = { Text("Dip fade") },
+                    label = { Text("Smooth fade") },
+                )
+                FilterChip(
+                    selected = s.style == TransitionStyle.OVERLAP,
+                    onClick = { update(s.copy(style = TransitionStyle.OVERLAP)) },
+                    label = { Text("Outro crossfade") },
                 )
             }
             if (s.style == TransitionStyle.OVERLAP) {
                 Hint(
-                    "Both songs play at the same time: the current one fades out while the next fades in. " +
-                        "At the mix point DJ Mix jumps the current song to its outro and Spotify's crossfade " +
-                        "blends it into the next track."
+                    "Experimental. Spotify can only blend the last seconds of a song into the next one, so at " +
+                        "the mix point DJ Mix jumps the song to its outro and lets Spotify's crossfade take over. " +
+                        "It only sounds right if Spotify's own crossfade works on your phone; otherwise use Smooth fade."
                 )
                 Hint(
                     "1. In Spotify open Settings > Playback and turn on Crossfade (1-12 s). Apps can't change it.\n" +
@@ -114,10 +114,15 @@ fun SettingsScreen(onBack: () -> Unit) {
                     } + ". Overlap needs a length above 0."
                 )
             } else {
-                Hint("The app fades the song down, drops the next one in quietly and fades it up.")
+                Hint(
+                    "At the mix point the song fades down from wherever it is (no jumping). The next song " +
+                        "starts underneath at low volume and rises. Spotify plays one song at a time, so the two " +
+                        "never sound together, but the handover is quick."
+                )
                 SliderRow("Fade out", s.fadeOutSec, 1..15, "s") { update(s.copy(fadeOutSec = it)) }
                 SliderRow("Fade in", s.fadeInSec, 0..10, "s") { update(s.copy(fadeInSec = it)) }
-                SliderRow("Volume dip during switch", s.floorPct, 0..60, "%") { update(s.copy(floorPct = it)) }
+                SliderRow("Lowest volume at the switch", s.floorPct, 0..60, "%") { update(s.copy(floorPct = it)) }
+                Hint("Higher keeps more energy through the switch; 0% fades to silence.")
                 SliderRow("Skip intro of next track", s.skipIntroSec, 0..30, "s") { update(s.copy(skipIntroSec = it)) }
             }
 

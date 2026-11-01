@@ -43,13 +43,15 @@ object Prefs {
             if (raw.isBlank()) return MixSettings()
             return try {
                 val j = JSONObject(raw)
+                // v2 made the smooth fade the default and retuned it; older saved values move over once.
+                val v2 = j.optInt("v", 1) >= 2
                 val d = MixSettings()
                 MixSettings(
                     mode = runCatching { PlayMode.valueOf(j.getString("mode")) }.getOrDefault(d.mode),
-                    style = runCatching { TransitionStyle.valueOf(j.getString("style")) }.getOrDefault(d.style),
+                    style = if (!v2) d.style else runCatching { TransitionStyle.valueOf(j.getString("style")) }.getOrDefault(d.style),
                     fadeOutSec = j.optInt("fadeOutSec", d.fadeOutSec),
-                    fadeInSec = j.optInt("fadeInSec", d.fadeInSec),
-                    floorPct = j.optInt("floorPct", d.floorPct),
+                    fadeInSec = if (!v2) d.fadeInSec else j.optInt("fadeInSec", d.fadeInSec),
+                    floorPct = if (!v2) d.floorPct else j.optInt("floorPct", d.floorPct),
                     mixOutEarlySec = j.optInt("mixOutEarlySec", d.mixOutEarlySec),
                     skipIntroSec = j.optInt("skipIntroSec", d.skipIntroSec),
                     avoidSameArtist = j.optBoolean("avoidSameArtist", d.avoidSameArtist),
@@ -67,6 +69,7 @@ object Prefs {
         }
         set(s) {
             val j = JSONObject()
+                .put("v", 2)
                 .put("mode", s.mode.name)
                 .put("style", s.style.name)
                 .put("fadeOutSec", s.fadeOutSec)

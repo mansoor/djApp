@@ -21,10 +21,14 @@ shuffled or in order, with DJ-style transitions between tracks.
   to **Play** a song now, play it **Next**, or **+Queue** it, even in shuffle mode.
 - **Auto mix**:
   - **Random play length**: each song mixes out at a random point within a range you set (e.g. 50–90 %).
-  - **Overlap** (default): both songs play at once, one fading out while the next fades in. At the mix point
-    the app jumps the current song to its outro and Spotify's crossfade blends it into the next track.
-    The overlap length is Spotify's *Settings → Playback → Crossfade* value (1–12 s).
-  - **Dip fade**: the app fades the song down, drops the next in quietly and fades it up (configurable).
+  - **Smooth fade** (default): at the mix point the song fades down from wherever it is, with no jumping.
+    The next song (already waiting in Spotify's queue, so it starts fast) comes in underneath at low
+    volume and rises. Fade lengths and the lowest volume are configurable.
+  - **Outro crossfade** (experimental): Spotify can only blend the *last* seconds of a song into the next,
+    so at the mix point the app jumps the song to its outro and lets Spotify's crossfade
+    (*Settings → Playback → Crossfade*) take over. It only helps if Spotify's own crossfade works on your phone.
+  - True two-deck mixing (two songs playing at once from any point, tempo, beat-matching) needs Spotify's
+    partner DJ integration, which only djay, rekordbox and Serato have. It isn't available to other apps.
   - **Smart switch (beta)**: listens to the audio output around the mix point and switches at a break where
     the voice band goes quiet, which is often where there are no vocals. Needs microphone permission; nothing is recorded.
 - Keeps mixing with the screen off (foreground service with notification controls).
