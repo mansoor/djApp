@@ -419,16 +419,24 @@ private fun Pads(engine: DjEngine.State) {
 
 @Composable
 private fun TransitionInfo(engine: DjEngine.State, settings: MixSettings, onOpenSpotify: () -> Unit) {
-    val overlapOff = settings.style == TransitionStyle.OVERLAP && engine.crossfadeMs == 0
+    val overlapOff = settings.style == TransitionStyle.OVERLAP && engine.crossfadeMs <= 0
     if (overlapOff) {
         Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF3A2A12)), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(12.dp)) {
-                Text("Spotify Crossfade is off", fontWeight = FontWeight.Bold)
+                Text("Set your Spotify crossfade length", fontWeight = FontWeight.Bold)
                 Text(
-                    "Overlapping mixes use Spotify's crossfade. In Spotify open Settings > Playback, turn on " +
-                        "Crossfade and pick the length (up to 12s). Until then DJ Mix uses dip fades.",
+                    "Overlap mixes use Spotify's Crossfade (Spotify > Settings > Playback). Spotify doesn't " +
+                        "reliably tell apps this setting, so tap the length you set there. Until then DJ Mix uses dip fades.",
                     style = MaterialTheme.typography.bodySmall,
                 )
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf(4, 6, 8, 10, 12).forEach { sec ->
+                        TextButton(
+                            onClick = { AppState.updateSettings(AppState.settings.value.copy(crossfadeSec = sec)) },
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
+                        ) { Text("${sec}s") }
+                    }
+                }
                 TextButton(onClick = onOpenSpotify) { Text("Open Spotify") }
             }
         }

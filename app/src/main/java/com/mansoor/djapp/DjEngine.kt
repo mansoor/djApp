@@ -54,6 +54,8 @@ object DjEngine {
         val error: String? = null,
         /** Spotify's crossfade length in ms; 0 = off, -1 = unknown. */
         val crossfadeMs: Int = -1,
+        /** What the Spotify SDK reports (unreliable: it often says off). */
+        val detectedCrossfadeMs: Int = -1,
         val loopLenMs: Long = 0,
         val loopStartMs: Long = 0,
         val repeatTrack: Boolean = false,
@@ -88,7 +90,7 @@ object DjEngine {
     private var phase = Phase.IDLE
     private var status = ""
     private var error: String? = null
-    private var crossfadeMs = -1
+    private var detectedCrossfadeMs = -1
     private var nativeQueued: String? = null
 
     // Current track plan
@@ -233,7 +235,7 @@ object DjEngine {
         remote?.playerApi?.crossfadeState
             ?.setResultCallback { cf ->
                 scope.launch {
-                    crossfadeMs = when {
+                    detectedCrossfadeMs = when {
                         !cf.isEnabled -> 0
                         cf.duration > 100 -> cf.duration
                         else -> cf.duration * 1000
@@ -560,7 +562,7 @@ object DjEngine {
     }
 
     private fun transitionLenMs(): Long =
-        if (settings.style == TransitionStyle.OVERLAP && crossfadeMs > 0) crossfadeMs.toLong()
+        if (settings.style == TransitionStyle.OVERLAP && xfadeMs() > 0) xfadeMs().toLong()
         else settings.fadeOutSec * 1000L
 
     private fun endBasedMix(dur: Long): Long = dur - settings.mixOutEarlySec * 1000L - transitionLenMs()
@@ -580,6 +582,9 @@ object DjEngine {
     }
 
     private fun effectiveMix(): Long = manualMix ?: plannedMix
+
+    /** Overlap length: the value the user entered, else what the SDK detected (0 = off, -1 = unknown). */
+    private fun xfadeMs(): Int = if (settings.crossfadeSec > 0) settings.crossfadeSec * 1000 else detectedCrossfadeMs
 
     /** Where the smart detector may switch: around the planned point, never past the end. */
     private fun smartWindow(dur: Long): Pair<Long, Long> {
@@ -643,7 +648,7 @@ object DjEngine {
 
     private fun mixToNext(manual: Boolean) {
         if (!running || transitionJob?.isActive == true) return
-        if (settings.style == TransitionStyle.OVERLAP && crossfadeMs > 0 && overlapReady()) {
+        if (settings.style == TransitionStyle.OVERLAP && xfadeMs() > 0 && overlapReady()) {
             startOverlap()
         } else {
             dipTransition(fadeOutMs = if (manual) minOf(settings.fadeOutSec * 1000L, 3000L) else null)
@@ -665,7 +670,7 @@ object DjEngine {
     private fun startOverlap() {
         val dur = lastPs?.track?.duration ?: return
         val fromUri = currentUri
-        val xf = crossfadeMs.toLong()
+        val xf = xfadeMs().toLong()
         transitionJob = scope.launch {
             phase = Phase.OVERLAP
             status = "Crossfading…"
@@ -903,7 +908,8 @@ object DjEngine {
             upcomingCount = if (running) queue.size - from else 0,
             queueVersion = queueVersion,
             error = error,
-            crossfadeMs = crossfadeMs,
+            crossfadeMs = xfadeMs(),
+            detectedCrossfadeMs = detectedCrossfadeMs,
             loopLenMs = loopLen,
             loopStartMs = loopStart,
             repeatTrack = repeatTrack,

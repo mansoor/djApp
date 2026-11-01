@@ -88,17 +88,31 @@ fun SettingsScreen(onBack: () -> Unit) {
                         "At the mix point DJ Mix jumps the current song to its outro and Spotify's crossfade " +
                         "blends it into the next track."
                 )
-                val cf = engine.crossfadeMs
-                Text(
-                    when {
-                        cf > 0 -> "Overlap length: ${cf / 1000}s (Spotify's Crossfade setting)"
-                        cf == 0 -> "Spotify Crossfade is OFF: turn it on to overlap"
-                        else -> "Overlap length: set by Spotify's Crossfade setting"
-                    },
-                    color = if (cf == 0) MaterialTheme.colorScheme.error else Green,
+                Hint(
+                    "1. In Spotify open Settings > Playback and turn on Crossfade (1-12 s). Apps can't change it.\n" +
+                        "2. Set the same length here. Spotify doesn't reliably tell apps this setting."
                 )
-                Hint("Change the overlap length in Spotify > Settings > Playback > Crossfade (1-12 s). Apps can't set it.")
                 TextButton(onClick = { openSpotify(ctx) }) { Text("Open Spotify") }
+                Column {
+                    Row {
+                        Text("Crossfade length set in Spotify", Modifier.weight(1f))
+                        Text(if (s.crossfadeSec == 0) "Auto" else "${s.crossfadeSec}s", color = Green)
+                    }
+                    Slider(
+                        value = s.crossfadeSec.toFloat(),
+                        onValueChange = { update(s.copy(crossfadeSec = it.roundToInt())) },
+                        valueRange = 0f..12f,
+                        steps = 11,
+                    )
+                }
+                val detected = engine.detectedCrossfadeMs
+                Hint(
+                    "Auto uses what Spotify reports: " + when {
+                        detected > 0 -> "${detected / 1000}s"
+                        detected == 0 -> "off (often wrong)"
+                        else -> "unknown"
+                    } + ". Overlap needs a length above 0."
+                )
             } else {
                 Hint("The app fades the song down, drops the next one in quietly and fades it up.")
                 SliderRow("Fade out", s.fadeOutSec, 1..15, "s") { update(s.copy(fadeOutSec = it)) }

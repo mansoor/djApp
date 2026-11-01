@@ -59,6 +59,7 @@ object Prefs {
                     minPlayPct = j.optInt("minPlayPct", d.minPlayPct),
                     maxPlayPct = j.optInt("maxPlayPct", d.maxPlayPct),
                     smartSwitch = j.optBoolean("smartSwitch", d.smartSwitch),
+                    crossfadeSec = j.optInt("crossfadeSec", d.crossfadeSec),
                 )
             } catch (e: Exception) {
                 MixSettings()
@@ -80,6 +81,7 @@ object Prefs {
                 .put("minPlayPct", s.minPlayPct)
                 .put("maxPlayPct", s.maxPlayPct)
                 .put("smartSwitch", s.smartSwitch)
+                .put("crossfadeSec", s.crossfadeSec)
             put("settings", j.toString())
         }
 }
