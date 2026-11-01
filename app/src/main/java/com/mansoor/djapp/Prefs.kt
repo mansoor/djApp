@@ -55,6 +55,10 @@ object Prefs {
                     avoidSameArtist = j.optBoolean("avoidSameArtist", d.avoidSameArtist),
                     alternatePlaylists = j.optBoolean("alternatePlaylists", d.alternatePlaylists),
                     blockSize = j.optInt("blockSize", d.blockSize),
+                    randomLength = j.optBoolean("randomLength", d.randomLength),
+                    minPlayPct = j.optInt("minPlayPct", d.minPlayPct),
+                    maxPlayPct = j.optInt("maxPlayPct", d.maxPlayPct),
+                    smartSwitch = j.optBoolean("smartSwitch", d.smartSwitch),
                 )
             } catch (e: Exception) {
                 MixSettings()
@@ -72,6 +76,10 @@ object Prefs {
                 .put("avoidSameArtist", s.avoidSameArtist)
                 .put("alternatePlaylists", s.alternatePlaylists)
                 .put("blockSize", s.blockSize)
+                .put("randomLength", s.randomLength)
+                .put("minPlayPct", s.minPlayPct)
+                .put("maxPlayPct", s.maxPlayPct)
+                .put("smartSwitch", s.smartSwitch)
             put("settings", j.toString())
         }
 }

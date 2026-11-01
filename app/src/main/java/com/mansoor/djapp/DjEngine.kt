@@ -1,8 +1,11 @@
 package com.mansoor.djapp
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.SystemClock
+import androidx.core.content.ContextCompat
 import com.spotify.android.appremote.api.ConnectionParams
 import com.spotify.android.appremote.api.Connector
 import com.spotify.android.appremote.api.SpotifyAppRemote
@@ -17,15 +20,15 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
+import kotlin.random.Random
 
 /**
- * The DJ: drives the Spotify app through App Remote, watches playback position and
- * performs transitions (fade out -> drop next track -> fade in) at the mix point.
+ * The DJ: drives the Spotify app through App Remote, watches playback position, decides each
+ * track's mix point and performs the transition (Spotify crossfade overlap or a volume dip).
  */
 object DjEngine {
-    enum class Phase { IDLE, PLAYING, FADING_OUT, SWITCHING, FADING_IN }
+    enum class Phase { IDLE, PLAYING, FADING_OUT, SWITCHING, FADING_IN, OVERLAP }
 
     data class State(
         val connected: Boolean = false,
@@ -38,18 +41,29 @@ object DjEngine {
         val durationMs: Long = 0,
         val positionMs: Long = 0,
         val mixPointMs: Long = 0,
+        val mixPointManual: Boolean = false,
+        val smartStartMs: Long = 0,
+        val smartEndMs: Long = 0,
         val art: Bitmap? = null,
         val phase: Phase = Phase.IDLE,
         val status: String = "",
         val source: String = "",
         val upNext: List<String> = emptyList(),
+        val upcomingCount: Int = 0,
+        val queueVersion: Int = 0,
         val error: String? = null,
-        val crossfadeInfo: String? = null,
+        /** Spotify's crossfade length in ms; 0 = off, -1 = unknown. */
+        val crossfadeMs: Int = -1,
+        val loopLenMs: Long = 0,
+        val loopStartMs: Long = 0,
+        val repeatTrack: Boolean = false,
+        val smartInfo: String? = null,
     )
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var app: Context
     private lateinit var fader: VolumeFader
+    private val rnd = Random.Default
 
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state.asStateFlow()
@@ -62,24 +76,38 @@ object DjEngine {
     private var authViewNeeded = false
     private var reconnectAttempts = 0
 
+    private var mode = PlayMode.SHUFFLE
     private var sources: List<Pair<PlaylistInfo, List<TrackInfo>?>> = emptyList()
-    private var queue: List<QueueEntry> = emptyList()
+    private var customTracks: List<TrackInfo> = emptyList()
+    private val queue = mutableListOf<QueueEntry>()
     private var index = 0
     private var blockPlayed = 0
+    private var queueVersion = 0
     private var running = false
     private var loading = false
     private var phase = Phase.IDLE
     private var status = ""
     private var error: String? = null
-    private var crossfadeInfo: String? = null
+    private var crossfadeMs = -1
     private var nativeQueued: String? = null
 
+    // Current track plan
+    private var planUri: String? = null
+    private var plannedMix = 0L
+    private var manualMix: Long? = null
+    private var loopLen = 0L
+    private var loopStart = 0L
+    private var repeatTrack = false
+
     private var lastPs: PlayerState? = null
-    private var lastPsAt = 0L
+    private var basePos = 0L
+    private var baseAt = 0L
     private var currentUri: String? = null
     private var lastImage: String? = null
     private var art: Bitmap? = null
     private var transitionJob: Job? = null
+    private var detector: LullDetector? = null
+    private var detectorFailed = false
 
     private val settings: MixSettings get() = AppState.settings.value
 
@@ -96,7 +124,9 @@ object DjEngine {
             while (true) {
                 delay(3000)
                 // Re-sync position periodically; events only arrive on state changes.
-                if (running) remote?.playerApi?.playerState?.setResultCallback { ps -> scope.launch { onPlayerState(ps) } }
+                if (running && transitionJob?.isActive != true) {
+                    remote?.playerApi?.playerState?.setResultCallback { ps -> scope.launch { onPlayerState(ps) } }
+                }
             }
         }
     }
@@ -159,15 +189,7 @@ object DjEngine {
         remote = r
         error = null
         r.playerApi.subscribeToPlayerState().setEventCallback { ps -> scope.launch { onPlayerState(ps) } }
-        r.playerApi.crossfadeState
-            .setResultCallback { cf ->
-                scope.launch {
-                    val secs = if (cf.duration > 100) cf.duration / 1000 else cf.duration
-                    crossfadeInfo = if (cf.isEnabled) "Spotify crossfade is ON (${secs}s)" else "Spotify crossfade is OFF"
-                    publish()
-                }
-            }
-            .setErrorCallback { }
+        refreshCrossfade()
         publish()
     }
 
@@ -207,16 +229,31 @@ object DjEngine {
         }
     }
 
-    // ---------------------------------------------------------------- public controls
+    private fun refreshCrossfade() {
+        remote?.playerApi?.crossfadeState
+            ?.setResultCallback { cf ->
+                scope.launch {
+                    crossfadeMs = when {
+                        !cf.isEnabled -> 0
+                        cf.duration > 100 -> cf.duration
+                        else -> cf.duration * 1000
+                    }
+                    publish()
+                }
+            }
+            ?.setErrorCallback { }
+    }
 
-    fun start(selected: List<PlaylistInfo>) {
+    // ---------------------------------------------------------------- start / stop
+
+    fun start(selected: List<PlaylistInfo>, custom: List<TrackInfo>) {
         val r = remote
         if (r == null || !r.isConnected) {
             error = "The Spotify app isn't connected yet. Tap Connect."
             publish()
             return
         }
-        if (selected.isEmpty() || loading) return
+        if (loading) return
         transitionJob?.cancel()
         scope.launch {
             loading = true
@@ -224,36 +261,45 @@ object DjEngine {
             status = "Loading tracks…"
             publish()
             try {
-                val loaded = selected.map { p ->
-                    p to try {
-                        SpotifyApi.tracks(p)
-                    } catch (e: Exception) {
-                        null
-                    }
-                }
                 val s = settings
-                val q = withContext(Dispatchers.Default) { MixBuilder.build(loaded, s) }
-                if (q.isEmpty()) {
-                    error = "Those playlists have no playable tracks."
+                val loaded = selected.map { it to AppState.loadTracks(it) }
+                val first: List<QueueEntry> = if (s.mode == PlayMode.CUSTOM) {
+                    custom.map { QueueEntry.Track(it) } +
+                        (if (loaded.isEmpty()) emptyList() else MixBuilder.build(loaded, s.copy(mode = PlayMode.SHUFFLE)))
+                } else {
+                    MixBuilder.build(loaded, s)
+                }
+                if (first.isEmpty()) {
+                    error = if (s.mode == PlayMode.CUSTOM) {
+                        "Your custom queue is empty. Open a playlist and add songs, or select playlists."
+                    } else {
+                        "Those playlists have no playable tracks."
+                    }
                     return@launch
                 }
+                mode = s.mode
                 sources = loaded
-                queue = q
+                customTracks = custom
+                queue.clear()
+                queue.addAll(first)
                 index = 0
+                nativeQueued = null
                 running = true
                 phase = Phase.SWITCHING
                 DjService.start(app)
                 r.playerApi.setRepeat(0)
+                if (s.smartSwitch) startDetector()
                 val blocks = loaded.count { it.second == null }
                 status = if (blocks > 0) {
                     "$blocks playlist(s) play in blocks (Spotify hides tracks of playlists you don't own)"
                 } else {
-                    "Mix started: ${q.size} tracks"
+                    "Mix started"
                 }
                 playCurrent(r, currentUri)
             } finally {
                 loading = false
                 if (running) phase = Phase.PLAYING
+                bump()
                 publish()
             }
         }
@@ -264,12 +310,45 @@ object DjEngine {
         running = false
         phase = Phase.IDLE
         nativeQueued = null
+        loopLen = 0
         transitionJob?.cancel()
+        stopDetector()
         if (wasRunning) remote?.playerApi?.pause()
         status = ""
         DjService.stop(app)
         publish()
     }
+
+    fun onSettingsChanged() {
+        if (!running) return
+        if (settings.smartSwitch) startDetector() else stopDetector()
+        if (settings.style == TransitionStyle.OVERLAP) queueNextNative()
+        publish()
+    }
+
+    private fun startDetector() {
+        if (detector != null) return
+        val granted = ContextCompat.checkSelfPermission(app, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            detectorFailed = true
+            return
+        }
+        val d = LullDetector()
+        if (d.start()) {
+            detector = d
+            detectorFailed = false
+        } else {
+            detectorFailed = true
+        }
+    }
+
+    private fun stopDetector() {
+        detector?.stop()
+        detector = null
+    }
+
+    // ---------------------------------------------------------------- deck controls
 
     fun togglePause() {
         val r = remote ?: return
@@ -282,28 +361,132 @@ object DjEngine {
     }
 
     /** "Mix now": transition to the next track straight away. */
-    fun next() {
-        if (running) transition(fadeOutMs = minOf(settings.fadeOutSec * 1000L, 3000L))
-    }
+    fun next() = mixToNext(manual = true)
 
     fun previous() {
         if (!running) return
         if (estimatedPosition() > 8000) {
-            remote?.playerApi?.seekTo(0)
+            seek(0)
             return
         }
         val e = queue.getOrNull(index)
-        if (e is QueueEntry.Block && blockPlayed > 0) {
+        if (e is QueueEntry.Block && blockPlayed > 0 && blockPlayed < e.count) {
             blockPlayed = (blockPlayed - 2).coerceAtLeast(-1) // the track-change event adds one back
             remote?.playerApi?.skipPrevious()
             return
         }
-        transition(fadeOutMs = 1500, jumpTo = (index - 1).coerceAtLeast(0))
+        dipTransition(fadeOutMs = 1500, jumpTo = (index - 1).coerceAtLeast(0))
     }
 
-    /** Jump to the k-th upcoming entry (0 = next). */
-    fun playUpcoming(k: Int) {
-        if (running) transition(fadeOutMs = 2000, jumpTo = index + 1 + k)
+    fun seek(ms: Long) {
+        val t = lastPs?.track ?: return
+        val dur = t.duration
+        val target = ms.coerceIn(0L, (dur - 1000).coerceAtLeast(0L))
+        seekLocal(target)
+        if (loopLen > 0 && (target < loopStart || target > loopStart + loopLen)) loopLen = 0
+        if (running && effectiveMix() < target + 4000) {
+            // Seeking past the mix point moves it later so the track isn't cut right away.
+            manualMix = null
+            plannedMix = maxOf(target + 4000, endBasedMix(dur)).coerceAtMost(dur - 1500)
+        }
+        publish()
+    }
+
+    fun nudge(deltaMs: Long) {
+        if (deltaMs != 0L) seek(estimatedPosition() + deltaMs)
+    }
+
+    /** Drag the mix marker: play the current track until [ms], then mix. */
+    fun setMixPoint(ms: Long) {
+        val dur = lastPs?.track?.duration ?: return
+        manualMix = ms.coerceAtMost(dur - 1500).coerceAtLeast(estimatedPosition() + 3000)
+        publish()
+    }
+
+    fun resetMixPoint() {
+        manualMix = null
+        publish()
+    }
+
+    fun toggleLoop(lenMs: Long) {
+        val dur = lastPs?.track?.duration ?: return
+        if (loopLen == lenMs) {
+            loopLen = 0
+        } else {
+            loopLen = lenMs
+            loopStart = estimatedPosition().coerceAtMost(dur - lenMs - 1500).coerceAtLeast(0)
+        }
+        publish()
+    }
+
+    fun toggleRepeat() {
+        repeatTrack = !repeatTrack
+        publish()
+    }
+
+    // ---------------------------------------------------------------- queue editing
+
+    fun upcoming(): List<QueueEntry> =
+        if (running && index + 1 < queue.size) queue.subList(index + 1, queue.size).toList() else emptyList()
+
+    fun moveUpcoming(from: Int, to: Int) {
+        val a = index + 1 + from
+        val b = index + 1 + to
+        if (a !in queue.indices || b !in queue.indices || a == b) return
+        queue.add(b, queue.removeAt(a))
+        edited()
+    }
+
+    fun removeUpcoming(i: Int) {
+        val a = index + 1 + i
+        if (a in queue.indices) {
+            queue.removeAt(a)
+            edited()
+        }
+    }
+
+    fun playNext(t: TrackInfo) {
+        if (!running) return
+        queue.add(index + 1, QueueEntry.Track(t))
+        edited()
+    }
+
+    fun addToQueue(t: TrackInfo) {
+        if (!running) return
+        queue.add(QueueEntry.Track(t))
+        edited()
+    }
+
+    /** Someone asked for a song: mix into it now. */
+    fun playNow(t: TrackInfo) {
+        if (!running) return
+        queue.add(index + 1, QueueEntry.Track(t))
+        leaveBlock()
+        edited()
+        mixToNext(manual = true)
+    }
+
+    fun jumpToUpcoming(i: Int) {
+        if (!running) return
+        if (i != 0) moveUpcoming(i, 0)
+        leaveBlock()
+        edited()
+        mixToNext(manual = true)
+    }
+
+    private fun leaveBlock() {
+        val e = queue.getOrNull(index)
+        if (e is QueueEntry.Block) blockPlayed = e.count
+    }
+
+    private fun edited() {
+        bump()
+        queueNextNative()
+        publish()
+    }
+
+    private fun bump() {
+        queueVersion++
     }
 
     fun clearError() {
@@ -317,13 +500,17 @@ object DjEngine {
         val prevPos = estimatedPosition()
         val prevDur = lastPs?.track?.duration ?: 0L
         lastPs = ps
-        lastPsAt = SystemClock.elapsedRealtime()
-        val uri = ps.track?.uri
-        if (uri != null && uri != currentUri) {
+        basePos = ps.playbackPosition
+        baseAt = SystemClock.elapsedRealtime()
+        val t = ps.track
+        val uri = t?.uri
+        if (t != null && uri != null && uri != currentUri) {
             currentUri = uri
+            planTrack(uri, t.duration)
+            refreshCrossfade()
             onTrackChanged(uri, prevPos, prevDur)
         }
-        val img = ps.track?.imageUri
+        val img = t?.imageUri
         if (img != null && img.raw != lastImage) {
             lastImage = img.raw
             remote?.imagesApi?.getImage(img, Image.Dimension.LARGE)
@@ -333,7 +520,7 @@ object DjEngine {
     }
 
     private fun onTrackChanged(uri: String, prevPos: Long, prevDur: Long) {
-        // During our own transitions the change is expected.
+        // During our own dip transitions the change is expected.
         if (!running || phase == Phase.SWITCHING || phase == Phase.FADING_OUT) return
         val queued = nativeQueued
         if (queued != null && uri == queued) {
@@ -341,70 +528,169 @@ object DjEngine {
             index++
             blockPlayed = 0
             nativeQueued = null
+            ensureAhead()
+            bump()
             queueNextNative()
             return
         }
         when (val e = queue.getOrNull(index)) {
             is QueueEntry.Block -> {
                 blockPlayed++
+                queueNextNative()
                 return
             }
             is QueueEntry.Track -> if (e.track.uri == uri) return
             null -> {}
         }
+        if (phase == Phase.OVERLAP) return
         if (prevDur > 0 && prevPos > prevDur - 6000) {
             // The track ran out and Spotify autoplayed something else: get back on the mix.
-            transition(withFadeOut = false)
+            dipTransition(withFadeOut = false)
         } else {
             status = "Playing a track picked in Spotify. The mix continues after it."
         }
     }
+
+    private fun planTrack(uri: String, dur: Long) {
+        planUri = uri
+        plannedMix = if (dur > 0) computeMixPoint(dur) else 0
+        manualMix = null
+        loopLen = 0
+        detector?.reset()
+    }
+
+    private fun transitionLenMs(): Long =
+        if (settings.style == TransitionStyle.OVERLAP && crossfadeMs > 0) crossfadeMs.toLong()
+        else settings.fadeOutSec * 1000L
+
+    private fun endBasedMix(dur: Long): Long = dur - settings.mixOutEarlySec * 1000L - transitionLenMs()
+
+    private fun computeMixPoint(dur: Long): Long {
+        val s = settings
+        val end = endBasedMix(dur)
+        var mp = end
+        if (s.randomLength) {
+            val lo = minOf(s.minPlayPct, s.maxPlayPct)
+            val hi = maxOf(s.minPlayPct, s.maxPlayPct)
+            val pct = if (hi > lo) rnd.nextInt(lo, hi + 1) else lo
+            mp = minOf(end, dur * pct / 100)
+            mp = maxOf(mp, minOf(45_000L, end))
+        }
+        return mp.coerceIn(minOf(5000L, dur / 2), maxOf(dur - 2000, 5000L))
+    }
+
+    private fun effectiveMix(): Long = manualMix ?: plannedMix
+
+    /** Where the smart detector may switch: around the planned point, never past the end. */
+    private fun smartWindow(dur: Long): Pair<Long, Long> {
+        val start = (plannedMix - 12_000).coerceAtLeast(0)
+        val end = minOf(plannedMix + 12_000, dur - transitionLenMs() - 1000)
+        return start to end
+    }
+
+    private fun smartActive(): Boolean =
+        manualMix == null && settings.smartSwitch && detector?.hasData() == true
 
     private fun tick() {
         val ps = lastPs
         if (ps != null && !ps.isPaused) publish()
         if (!running || phase != Phase.PLAYING || ps == null) return
         val t = ps.track ?: return
-        if (t.duration <= 0) return
+        val dur = t.duration
+        if (dur <= 0) return
+        if (planUri != t.uri) planTrack(t.uri, dur)
         val pos = estimatedPosition()
         if (ps.isPaused) {
             // Spotify stopped by itself at the end of something: keep the music going.
-            if (pos >= t.duration - 1500 && SystemClock.elapsedRealtime() - lastPsAt > 1500) transition(withFadeOut = false)
+            if (pos >= dur - 1500 && SystemClock.elapsedRealtime() - baseAt > 1500) dipTransition(withFadeOut = false)
             return
         }
-        if (pos > t.duration + 4000) {
-            transition(withFadeOut = false)
+        if (loopLen > 0) {
+            if (pos >= loopStart + loopLen) seekLocal(loopStart)
             return
         }
-        if (spotifyHandlesNext()) return
-        if (pos >= triggerPoint(t.duration)) transition()
-    }
-
-    private fun spotifyHandlesNext(): Boolean {
-        if (settings.style != TransitionStyle.SPOTIFY_CROSSFADE) return false
-        return when (val e = queue.getOrNull(index)) {
-            is QueueEntry.Block -> blockPlayed + 1 < e.count
-            is QueueEntry.Track -> nativeQueued != null
-            null -> false
+        if (pos > dur + 4000) {
+            dipTransition(withFadeOut = false)
+            return
         }
+        if (smartActive()) {
+            val (ws, we) = smartWindow(dur)
+            if (we > ws) {
+                if (pos >= we || (pos >= ws && detector?.isLull() == true)) trigger()
+                return
+            }
+        }
+        if (pos >= effectiveMix()) trigger()
     }
 
-    private fun triggerPoint(durationMs: Long): Long {
-        val s = settings
-        val lead = (s.fadeOutSec + s.mixOutEarlySec) * 1000L
-        return maxOf(durationMs - lead, minOf(durationMs / 2, 20_000L))
+    private fun trigger() {
+        if (repeatTrack) repeatCurrent() else mixToNext(manual = false)
+    }
+
+    private fun seekLocal(ms: Long) {
+        basePos = ms
+        baseAt = SystemClock.elapsedRealtime()
+        remote?.playerApi?.seekTo(ms)
     }
 
     private fun estimatedPosition(): Long {
         val ps = lastPs ?: return 0
-        if (ps.isPaused) return ps.playbackPosition
-        val speed = if (ps.playbackSpeed > 0f) ps.playbackSpeed else 1f
-        return ps.playbackPosition + ((SystemClock.elapsedRealtime() - lastPsAt) * speed).toLong()
+        if (ps.isPaused) return basePos
+        return basePos + (SystemClock.elapsedRealtime() - baseAt)
     }
 
     // ---------------------------------------------------------------- transitions
 
-    private fun transition(withFadeOut: Boolean = true, fadeOutMs: Long? = null, jumpTo: Int? = null) {
+    private fun mixToNext(manual: Boolean) {
+        if (!running || transitionJob?.isActive == true) return
+        if (settings.style == TransitionStyle.OVERLAP && crossfadeMs > 0 && overlapReady()) {
+            startOverlap()
+        } else {
+            dipTransition(fadeOutMs = if (manual) minOf(settings.fadeOutSec * 1000L, 3000L) else null)
+        }
+    }
+
+    /** True when Spotify's own next track is the one we want, so its crossfade can do the mix. */
+    private fun overlapReady(): Boolean {
+        val cur = queue.getOrNull(index) ?: return false
+        if (cur is QueueEntry.Block && blockPlayed + 1 < cur.count) return nativeQueued == null
+        val next = queue.getOrNull(index + 1) as? QueueEntry.Track ?: return false
+        return nativeQueued == next.track.uri
+    }
+
+    /**
+     * Jump the current track to its last few seconds so Spotify's crossfade starts now and
+     * overlaps it with the next track: both play at once, one fading out, one fading in.
+     */
+    private fun startOverlap() {
+        val dur = lastPs?.track?.duration ?: return
+        val fromUri = currentUri
+        val xf = crossfadeMs.toLong()
+        transitionJob = scope.launch {
+            phase = Phase.OVERLAP
+            status = "Crossfading…"
+            publish()
+            val base = fader.current()
+            try {
+                val target = dur - xf - 300
+                if (estimatedPosition() < target - 1500) {
+                    val dip = (base * 0.7f).roundToInt()
+                    fader.ramp(base, dip, 200)
+                    seekLocal(target)
+                    delay(150)
+                    fader.ramp(dip, base, 300)
+                }
+                awaitTrack(xf + 6000) { it != null && it != fromUri }
+                status = ""
+            } finally {
+                fader.set(base)
+                if (running) phase = Phase.PLAYING
+                publish()
+            }
+        }
+    }
+
+    private fun dipTransition(withFadeOut: Boolean = true, fadeOutMs: Long? = null, jumpTo: Int? = null) {
         if (transitionJob?.isActive == true) return
         val r = remote ?: return
         val s = settings
@@ -427,7 +713,7 @@ object DjEngine {
                 if (started && s.skipIntroSec > 0) {
                     val dur = lastPs?.track?.duration ?: 0L
                     if (dur > s.skipIntroSec * 1000L + 60_000L) {
-                        r.playerApi.seekTo(s.skipIntroSec * 1000L)
+                        seekLocal(s.skipIntroSec * 1000L)
                         delay(300)
                     }
                 }
@@ -444,51 +730,102 @@ object DjEngine {
         }
     }
 
+    /** Repeat button: fade out, start the same track again, fade in. */
+    private fun repeatCurrent() {
+        if (transitionJob?.isActive == true) return
+        val s = settings
+        transitionJob = scope.launch {
+            val baseVol = fader.current()
+            val floor = (baseVol * s.floorPct / 100f).roundToInt()
+            try {
+                phase = Phase.FADING_OUT
+                status = "Repeating…"
+                publish()
+                fader.ramp(baseVol, floor, 1500)
+                seekLocal(s.skipIntroSec * 1000L)
+                delay(300)
+                phase = Phase.FADING_IN
+                fader.ramp(floor, baseVol, maxOf(s.fadeInSec, 1) * 1000L)
+                status = ""
+            } finally {
+                fader.set(baseVol)
+                val uri = currentUri
+                val dur = lastPs?.track?.duration ?: 0L
+                if (uri != null) planTrack(uri, dur)
+                if (running) phase = Phase.PLAYING
+                publish()
+            }
+        }
+    }
+
     private suspend fun advance(r: SpotifyAppRemote, jumpTo: Int?): Boolean {
         val fromUri = currentUri
         val entry = queue.getOrNull(index)
+        val next = queue.getOrNull(index + 1)
         val queued = nativeQueued
         nativeQueued = null
 
-        if (jumpTo == null && queued != null && entry is QueueEntry.Track) {
+        if (jumpTo == null && queued != null && next is QueueEntry.Track && next.track.uri == queued) {
             // The next track is already in Spotify's queue: skip into it so it's consumed.
             r.playerApi.skipNext()
             val ok = awaitTrack { it == queued }
             index++
             blockPlayed = 0
+            ensureAhead()
+            bump()
             if (ok) queueNextNative()
             return ok
         }
-        if (jumpTo == null && entry is QueueEntry.Block && blockPlayed + 1 < entry.count) {
+        if (jumpTo == null && queued == null && entry is QueueEntry.Block && blockPlayed + 1 < entry.count) {
             blockPlayed++
             r.playerApi.skipNext()
             return awaitTrack { it != null && it != fromUri }
         }
-        index = jumpTo ?: (index + 1)
-        if (index >= queue.size) {
-            queue = withContext(Dispatchers.Default) { MixBuilder.build(sources, settings) }
-            status = "Starting a fresh round"
-            index = 0
+        if (queued != null) {
+            // Something we queued in Spotify is no longer next: play through it while the volume is down.
+            r.playerApi.skipNext()
+            awaitTrack(3000) { it == queued }
         }
-        if (index < 0) index = 0
-        return playCurrent(r, fromUri)
+        index = jumpTo ?: (index + 1)
+        ensureAhead()
+        if (index !in queue.indices) index = 0
+        bump()
+        return playCurrent(r, currentUri)
     }
 
     private suspend fun playCurrent(r: SpotifyAppRemote, fromUri: String?): Boolean {
         blockPlayed = 0
         val ok = when (val e = queue.getOrNull(index) ?: return false) {
             is QueueEntry.Track -> {
-                r.playerApi.play(e.track.uri).setErrorCallback { t -> onPlayError(t) }
-                awaitTrack { it == e.track.uri }
+                val uri = e.track.uri
+                r.playerApi.play(uri).setErrorCallback { t -> onPlayError(t) }
+                val started = awaitTrack { it == uri && (uri != fromUri || estimatedPosition() < 4000) }
+                if (started && uri == fromUri) planTrack(uri, lastPs?.track?.duration ?: 0L)
+                started
             }
             is QueueEntry.Block -> {
-                r.playerApi.setShuffle(settings.mode == PlayMode.SHUFFLE)
+                r.playerApi.setShuffle(mode != PlayMode.SEQUENCE)
                 r.playerApi.play(e.playlist.uri).setErrorCallback { t -> onPlayError(t) }
                 awaitTrack { it != null && it != fromUri }
             }
         }
+        ensureAhead()
         if (ok) queueNextNative()
         return ok
+    }
+
+    /** Keeps the queue endless: append a fresh round when we're near the end. */
+    private fun ensureAhead() {
+        if (queue.size - index > 2) return
+        val more: List<QueueEntry> = when {
+            mode == PlayMode.CUSTOM && sources.isEmpty() -> customTracks.map { QueueEntry.Track(it) }
+            mode == PlayMode.CUSTOM -> MixBuilder.build(sources, settings.copy(mode = PlayMode.SHUFFLE))
+            else -> MixBuilder.build(sources, settings.copy(mode = mode))
+        }
+        if (more.isNotEmpty()) {
+            queue.addAll(more)
+            bump()
+        }
     }
 
     private fun onPlayError(t: Throwable) {
@@ -498,10 +835,15 @@ object DjEngine {
         }
     }
 
-    /** In Spotify-crossfade mode, keep the next track queued in Spotify so it overlaps natively. */
+    /** In overlap mode, keep the next track queued in Spotify so its crossfade can blend into it. */
     private fun queueNextNative() {
-        if (settings.style != TransitionStyle.SPOTIFY_CROSSFADE) return
-        if (queue.getOrNull(index) !is QueueEntry.Track) return
+        if (!running || settings.style != TransitionStyle.OVERLAP || nativeQueued != null) return
+        val ready = when (val cur = queue.getOrNull(index)) {
+            is QueueEntry.Track -> true
+            is QueueEntry.Block -> blockPlayed + 1 >= cur.count
+            null -> false
+        }
+        if (!ready) return
         val next = queue.getOrNull(index + 1) as? QueueEntry.Track ?: return
         remote?.playerApi?.queue(next.track.uri)
         nativeQueued = next.track.uri
@@ -519,11 +861,6 @@ object DjEngine {
 
     // ---------------------------------------------------------------- UI state
 
-    private fun label(e: QueueEntry): String = when (e) {
-        is QueueEntry.Track -> "${e.track.name} · ${e.track.artist}"
-        is QueueEntry.Block -> "${e.count} tracks from \"${e.playlist.name}\""
-    }
-
     private fun publish() {
         val ps = lastPs
         val t = ps?.track
@@ -531,6 +868,15 @@ object DjEngine {
         val e = queue.getOrNull(index)
         val from = minOf(index + 1, queue.size)
         val to = minOf(index + 9, queue.size)
+        val smart = running && smartActive() && dur > 0
+        val window = if (smart) smartWindow(dur) else (0L to 0L)
+        val smartInfo = when {
+            !settings.smartSwitch -> null
+            !running -> null
+            detectorFailed -> "Smart switch unavailable (allow microphone access in settings)"
+            detector?.hasData() == true -> if (manualMix != null) "Smart switch paused: you set the mix point" else "Smart switch: listening for a break"
+            else -> "Smart switch: no audio data yet, using the planned point"
+        }
         _state.value = State(
             connected = remote?.isConnected == true,
             connecting = connecting,
@@ -541,18 +887,27 @@ object DjEngine {
             artist = t?.artist?.name ?: "",
             durationMs = dur,
             positionMs = estimatedPosition().coerceIn(0L, maxOf(dur, 0L)),
-            mixPointMs = if (dur > 0) triggerPoint(dur) else 0,
+            mixPointMs = if (running && dur > 0) effectiveMix() else 0,
+            mixPointManual = manualMix != null,
+            smartStartMs = window.first,
+            smartEndMs = window.second,
             art = art,
             phase = phase,
             status = status,
             source = when (e) {
                 is QueueEntry.Track -> e.track.source
-                is QueueEntry.Block -> "${e.playlist.name} · ${(blockPlayed + 1).coerceAtLeast(1)}/${e.count}"
+                is QueueEntry.Block -> "${e.playlist.name} · ${(blockPlayed + 1).coerceIn(1, e.count)}/${e.count}"
                 null -> ""
             },
-            upNext = if (running) queue.subList(from, to).map { label(it) } else emptyList(),
+            upNext = if (running) queue.subList(from, to).map { it.label() } else emptyList(),
+            upcomingCount = if (running) queue.size - from else 0,
+            queueVersion = queueVersion,
             error = error,
-            crossfadeInfo = crossfadeInfo,
+            crossfadeMs = crossfadeMs,
+            loopLenMs = loopLen,
+            loopStartMs = loopStart,
+            repeatTrack = repeatTrack,
+            smartInfo = smartInfo,
         )
     }
 }

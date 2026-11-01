@@ -25,15 +25,26 @@ sealed class QueueEntry {
 
     /** A playlist whose tracks we can't read: Spotify plays [count] tracks from it as a context. */
     data class Block(val playlist: PlaylistInfo, val count: Int) : QueueEntry()
+
+    fun label(): String = when (this) {
+        is Track -> "${track.name} · ${track.artist}"
+        is Block -> "$count tracks from \"${playlist.name}\""
+    }
 }
 
-enum class PlayMode { SHUFFLE, SEQUENCE }
+enum class PlayMode { SHUFFLE, SEQUENCE, CUSTOM }
 
-enum class TransitionStyle { DJ_FADE, SPOTIFY_CROSSFADE }
+enum class TransitionStyle {
+    /** Spotify's own crossfade overlaps the two tracks; the app picks the moment. */
+    OVERLAP,
+
+    /** The app dips the volume around the track change. */
+    DJ_FADE,
+}
 
 data class MixSettings(
     val mode: PlayMode = PlayMode.SHUFFLE,
-    val style: TransitionStyle = TransitionStyle.DJ_FADE,
+    val style: TransitionStyle = TransitionStyle.OVERLAP,
     val fadeOutSec: Int = 6,
     val fadeInSec: Int = 3,
     val floorPct: Int = 15,
@@ -42,6 +53,10 @@ data class MixSettings(
     val avoidSameArtist: Boolean = true,
     val alternatePlaylists: Boolean = false,
     val blockSize: Int = 4,
+    val randomLength: Boolean = true,
+    val minPlayPct: Int = 50,
+    val maxPlayPct: Int = 90,
+    val smartSwitch: Boolean = false,
 )
 
 const val LIKED_ID = "__liked__"

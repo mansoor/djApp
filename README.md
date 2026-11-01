@@ -9,15 +9,24 @@ shuffled or in order, with DJ-style transitions between tracks.
 ## Features
 
 - Pick multiple playlists plus Liked Songs and merge them into one continuous mix.
-- **Shuffle** (smart: no duplicates, avoids the same artist back to back, can alternate between playlists) or **In order**.
+- Modes: **Shuffle** (no duplicates, avoids the same artist back to back, can alternate between playlists),
+  **In order**, or **Custom** (your hand-picked songs first, then the selected playlists).
 - Endless: when the queue runs out it reshuffles and keeps going.
-- Two transition styles:
-  - **DJ fade** (default): at the mix point the app fades the outgoing track down (equal-power curve),
-    drops the next track at a low level and fades it up. You can tune fade-out and fade-in length,
-    how deep the volume dips, a **mix out early** setting to cut long outros, and **skip intro** to cue the next track a few seconds in.
-  - **Spotify crossfade**: the app keeps the next track queued in Spotify so Spotify overlaps them
-    (a true crossfade). Turn on *Spotify → Settings → Playback → Crossfade* (8–12 s works well).
-- Now-playing deck with artwork, a mix-point marker on the progress bar, "Mix next" (transition right now), and a tappable up-next list.
+- **Deck**:
+  - Spinning vinyl with the album art as its label. Drag it round like a jog wheel to move through the track.
+  - Progress bar with two handles: drag or tap the white playhead to seek, and drag the purple **mix marker**
+    to choose when the next song comes in (e.g. move 1:30 to 2:30 to play the song longer). Tap **Auto** to go back.
+  - ±10 s, **Loop** 4/8/16 s, **Repeat** track, "Mix next now", previous.
+- **Queue**: see everything coming up, search it, mix into any song now, reorder, remove. Open any playlist
+  to **Play** a song now, play it **Next**, or **+Queue** it, even in shuffle mode.
+- **Auto mix**:
+  - **Random play length**: each song mixes out at a random point within a range you set (e.g. 50–90 %).
+  - **Overlap** (default): both songs play at once, one fading out while the next fades in. At the mix point
+    the app jumps the current song to its outro and Spotify's crossfade blends it into the next track.
+    The overlap length is Spotify's *Settings → Playback → Crossfade* value (1–12 s).
+  - **Dip fade**: the app fades the song down, drops the next in quietly and fades it up (configurable).
+  - **Smart switch (beta)**: listens to the audio output around the mix point and switches at a break where
+    the voice band goes quiet, which is often where there are no vocals. Needs microphone permission; nothing is recorded.
 - Keeps mixing with the screen off (foreground service with notification controls).
 
 ## One-time setup (about 3 minutes)
@@ -53,10 +62,17 @@ The setup screen in the app shows the redirect URI, package name and SHA1, with 
   Other playlists (e.g. Spotify-made ones you follow) still work: they're played as *blocks* of N
   tracks (set the block size in settings) via Spotify itself, with DJ transitions at each track change.
   Tip: save a copy of a followed playlist to your own library ("Add to other playlist") to fully mix it.
-- Spotify's audio-features / BPM endpoints are no longer available to new apps, so there's no beat-matching.
-- The DJ fade changes the **phone's** media volume, so it doesn't work while Spotify is playing on another device through Connect.
-- Most phones have about 15 media volume steps, so fades move in small steps.
-- In Spotify-crossfade mode the app adds the next track to your Spotify queue. Anything already in your queue plays first.
+- Spotify's audio-features / BPM endpoints are no longer available to new apps, so there's no beat-matching,
+  and Smart switch can only guess at breaks from the sound.
+- **No tempo / speed control**: App Remote only exposes playback speed for podcasts. Premium downloads are
+  encrypted and only playable inside Spotify, and Spotify's terms forbid caching or altering its audio.
+- Apps can only play one Spotify stream at a time, so overlap mixes rely on Spotify's own crossfade, whose length
+  only Spotify's settings can change. Jumping to the outro is audible as a quick cut, softened by a short volume dip.
+- Loops are made by seeking, so there's a tiny gap at each loop point.
+- Dip fades change the **phone's** media volume, so they don't work while Spotify is playing on another device through Connect.
+  Most phones have about 15 media volume steps, so fades move in small steps.
+- In overlap mode the app adds the next track to your Spotify queue. Anything already in your queue plays first,
+  and if you stop a mix, the queued song stays in Spotify's queue.
 
 ## Build it yourself
 

@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -30,12 +29,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.ContentCopy
@@ -46,8 +45,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -55,22 +52,15 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.IconButtonDefaults
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -99,18 +89,23 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import java.security.MessageDigest
-import kotlin.math.roundToInt
 
-private val Green = Color(0xFF1ED760)
+val Green = Color(0xFF1ED760)
+val Purple = Color(0xFFB388FF)
 
 private val DjColors = darkColorScheme(
     primary = Green,
     onPrimary = Color.Black,
-    secondary = Color(0xFFB388FF),
+    secondary = Purple,
     background = Color(0xFF121212),
     surface = Color(0xFF121212),
     surfaceVariant = Color(0xFF242424),
 )
+
+fun fmt(ms: Long): String {
+    val s = (ms / 1000).coerceAtLeast(0)
+    return "%d:%02d".format(s / 60, s % 60)
+}
 
 @Composable
 fun DjAppUi(activity: ComponentActivity) {
@@ -229,11 +224,15 @@ private fun CopyRow(label: String, value: String) {
     }
 }
 
-// ------------------------------------------------------------------ main
+// ------------------------------------------------------------------ navigation
 
 @Composable
 private fun MainScreen(activity: ComponentActivity) {
-    var screen by rememberSaveable { mutableStateOf("library") }
+    var stack by remember { mutableStateOf(listOf("library")) }
+    val screen = stack.last()
+    val push: (String) -> Unit = { s -> stack = stack + s }
+    val pop: () -> Unit = { if (stack.size > 1) stack = stack.dropLast(1) }
+
     val engine by DjEngine.state.collectAsState()
     val playlists by AppState.playlists.collectAsState()
     val message by AppState.message.collectAsState()
@@ -248,12 +247,12 @@ private fun MainScreen(activity: ComponentActivity) {
             AppState.message.value = null
         }
     }
-    BackHandler(enabled = screen != "library") { screen = "library" }
+    BackHandler(enabled = stack.size > 1) { pop() }
 
     val startMix: () -> Unit = {
         val sel = AppState.selected.value
-        DjEngine.start(playlists.filter { it.id in sel })
-        screen = "player"
+        DjEngine.start(playlists.filter { it.id in sel }, AppState.customQueue.value)
+        stack = listOf("library", "player")
     }
     val notifPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { startMix() }
     val requestStart: () -> Unit = {
@@ -266,12 +265,25 @@ private fun MainScreen(activity: ComponentActivity) {
         }
     }
 
-    when (screen) {
-        "settings" -> SettingsScreen(onBack = { screen = if (engine.running) "player" else "library" })
-        "player" -> PlayerScreen(engine, onBack = { screen = "library" }, onSettings = { screen = "settings" })
-        else -> LibraryScreen(activity, engine, snackbar, requestStart, onOpenPlayer = { screen = "player" }, onSettings = { screen = "settings" })
+    when {
+        screen == "settings" -> SettingsScreen(onBack = pop)
+        screen == "player" -> PlayerScreen(engine, onBack = pop, onSettings = { push("settings") }, onQueue = { push("queue") })
+        screen == "queue" -> QueueScreen(engine, onBack = pop, onBrowse = { stack = listOf("library") })
+        screen.startsWith("tracks:") -> {
+            val p = playlists.firstOrNull { it.id == screen.removePrefix("tracks:") }
+            if (p == null) pop() else TracksScreen(p, engine, onBack = pop)
+        }
+        else -> LibraryScreen(
+            activity, engine, snackbar, requestStart,
+            onOpenPlayer = { push("player") },
+            onSettings = { push("settings") },
+            onOpenPlaylist = { push("tracks:${it.id}") },
+            onQueue = { push("queue") },
+        )
     }
 }
+
+// ------------------------------------------------------------------ library
 
 @Composable
 private fun LibraryScreen(
@@ -281,11 +293,14 @@ private fun LibraryScreen(
     onStart: () -> Unit,
     onOpenPlayer: () -> Unit,
     onSettings: () -> Unit,
+    onOpenPlaylist: (PlaylistInfo) -> Unit,
+    onQueue: () -> Unit,
 ) {
     val playlists by AppState.playlists.collectAsState()
     val loading by AppState.loadingPlaylists.collectAsState()
     val selected by AppState.selected.collectAsState()
     val settings by AppState.settings.collectAsState()
+    val custom by AppState.customQueue.collectAsState()
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
@@ -313,7 +328,7 @@ private fun LibraryScreen(
                     MiniPlayer(engine, onOpenPlayer)
                     Spacer(Modifier.height(8.dp))
                 }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     FilterChip(
                         selected = settings.mode == PlayMode.SHUFFLE,
                         onClick = { AppState.updateSettings(settings.copy(mode = PlayMode.SHUFFLE)) },
@@ -324,13 +339,32 @@ private fun LibraryScreen(
                         onClick = { AppState.updateSettings(settings.copy(mode = PlayMode.SEQUENCE)) },
                         label = { Text("In order") },
                     )
+                    FilterChip(
+                        selected = settings.mode == PlayMode.CUSTOM,
+                        onClick = { AppState.updateSettings(settings.copy(mode = PlayMode.CUSTOM)) },
+                        label = { Text("Custom (${custom.size})") },
+                    )
+                }
+                if (settings.mode == PlayMode.CUSTOM) {
+                    Text(
+                        "Custom plays your hand-picked songs first (open a playlist to add songs), then " +
+                            "carries on with the selected playlists.",
+                        style = MaterialTheme.typography.bodySmall, color = Color.Gray,
+                    )
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (settings.mode == PlayMode.CUSTOM) {
+                        TextButton(onClick = onQueue) { Text("Edit custom queue") }
+                    }
                     Spacer(Modifier.weight(1f))
                     val count = playlists.count { it.id in selected }
-                    Button(onClick = onStart, enabled = count > 0 && engine.connected && !engine.loading) {
+                    val canStart = (count > 0 || (settings.mode == PlayMode.CUSTOM && custom.isNotEmpty())) &&
+                        engine.connected && !engine.loading
+                    Button(onClick = onStart, enabled = canStart) {
                         if (engine.loading) {
                             CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.Black)
                         } else {
-                            Text(if (engine.running) "Restart mix ($count)" else "Start mix ($count)")
+                            Text(if (engine.running) "Restart mix" else "Start mix")
                         }
                     }
                 }
@@ -339,13 +373,20 @@ private fun LibraryScreen(
     ) { pad ->
         LazyColumn(Modifier.padding(pad).fillMaxSize()) {
             item { ConnectionBanner(activity, engine) }
+            item {
+                Text(
+                    "Tick playlists to mix. Tap a playlist to see its songs and add or play any of them.",
+                    style = MaterialTheme.typography.bodySmall, color = Color.Gray,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
             if (loading && playlists.isEmpty()) {
                 item {
                     Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
                 }
             }
             items(playlists, key = { it.id }) { p ->
-                PlaylistRow(p, p.id in selected) { AppState.toggle(p.id) }
+                PlaylistRow(p, p.id in selected, onToggle = { AppState.toggle(p.id) }, onOpen = { onOpenPlaylist(p) })
             }
         }
     }
@@ -401,23 +442,23 @@ private fun reauthorize(activity: ComponentActivity) {
     activity.startActivity(Intent(Intent.ACTION_VIEW, SpotifyAuth.authUri()))
 }
 
-/** Brings Spotify to the foreground so it can wake up / show its approval screen. */
-private fun openSpotify(activity: ComponentActivity) {
-    val launch = activity.packageManager.getLaunchIntentForPackage("com.spotify.music")
+/** Brings Spotify to the foreground (to wake it up, or to change its settings). */
+fun openSpotify(ctx: Context) {
+    val launch = ctx.packageManager.getLaunchIntentForPackage("com.spotify.music")
         ?: Intent(Intent.ACTION_VIEW, android.net.Uri.parse("spotify:"))
     try {
-        activity.startActivity(launch)
+        ctx.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     } catch (e: Exception) {
         AppState.message.value = "Couldn't open Spotify: ${e.message}"
     }
 }
 
 @Composable
-private fun PlaylistRow(p: PlaylistInfo, checked: Boolean, onToggle: () -> Unit) {
+private fun PlaylistRow(p: PlaylistInfo, checked: Boolean, onToggle: () -> Unit, onOpen: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .clickable(onClick = onToggle)
+            .clickable(onClick = onOpen)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -445,6 +486,7 @@ private fun PlaylistRow(p: PlaylistInfo, checked: Boolean, onToggle: () -> Unit)
             }
             Text(sub, style = MaterialTheme.typography.bodySmall, color = Color.Gray, maxLines = 1)
         }
+        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Open", tint = Color.Gray)
     }
 }
 
@@ -455,7 +497,7 @@ private fun MiniPlayer(engine: DjEngine.State, onOpen: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         engine.art?.let {
-            Image(it.asImageBitmap(), null, Modifier.size(40.dp).clip(RoundedCornerShape(4.dp)))
+            Image(it.asImageBitmap(), null, Modifier.size(40.dp).clip(CircleShape), contentScale = ContentScale.Crop)
             Spacer(Modifier.width(8.dp))
         }
         Column(Modifier.weight(1f)) {
@@ -466,234 +508,5 @@ private fun MiniPlayer(engine: DjEngine.State, onOpen: () -> Unit) {
             Icon(if (engine.paused) Icons.Default.PlayArrow else Icons.Default.Pause, "Play/pause")
         }
         IconButton(onClick = { DjEngine.next() }) { Icon(Icons.Default.SkipNext, "Mix next") }
-    }
-}
-
-// ------------------------------------------------------------------ player
-
-private fun fmt(ms: Long): String {
-    val s = (ms / 1000).coerceAtLeast(0)
-    return "%d:%02d".format(s / 60, s % 60)
-}
-
-@Composable
-private fun PlayerScreen(engine: DjEngine.State, onBack: () -> Unit, onSettings: () -> Unit) {
-    val settings by AppState.settings.collectAsState()
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(if (engine.running) "Now mixing" else "Player") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
-                actions = { IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, "Settings") } },
-            )
-        },
-    ) { pad ->
-        LazyColumn(
-            Modifier.padding(pad).fillMaxSize().padding(horizontal = 20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            item {
-                Box(
-                    Modifier.fillMaxWidth(0.85f).aspectRatio(1f).clip(RoundedCornerShape(12.dp)).background(Color(0xFF2A2A2A)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    val art = engine.art
-                    if (art != null) {
-                        Image(art.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                    } else {
-                        Icon(Icons.Default.LibraryMusic, null, Modifier.size(64.dp), tint = Color.Gray)
-                    }
-                }
-                Spacer(Modifier.height(16.dp))
-                Text(
-                    engine.trackName.ifBlank { if (engine.loading) "Loading tracks…" else "Nothing playing" },
-                    style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold,
-                    maxLines = 2, overflow = TextOverflow.Ellipsis,
-                )
-                Text(engine.artist, color = Color.LightGray, maxLines = 1)
-                if (engine.source.isNotBlank()) {
-                    Text("from ${engine.source}", style = MaterialTheme.typography.bodySmall, color = Color.Gray, maxLines = 1)
-                }
-                Spacer(Modifier.height(12.dp))
-                MixProgress(engine)
-                Spacer(Modifier.height(4.dp))
-                val phaseText = when (engine.phase) {
-                    DjEngine.Phase.FADING_OUT, DjEngine.Phase.SWITCHING, DjEngine.Phase.FADING_IN -> engine.status
-                    else -> engine.status.ifBlank {
-                        if (engine.running && engine.mixPointMs > 0) "Next mix at ${fmt(engine.mixPointMs)}" else ""
-                    }
-                }
-                Text(
-                    phaseText,
-                    color = if (engine.phase == DjEngine.Phase.PLAYING || engine.phase == DjEngine.Phase.IDLE) Color.Gray else Green,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                engine.error?.let {
-                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                }
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    IconButton(onClick = { DjEngine.previous() }, enabled = engine.running) {
-                        Icon(Icons.Default.SkipPrevious, "Previous", Modifier.size(32.dp))
-                    }
-                    FilledIconButton(
-                        onClick = { DjEngine.togglePause() },
-                        modifier = Modifier.size(72.dp),
-                        colors = IconButtonDefaults.filledIconButtonColors(containerColor = Green, contentColor = Color.Black),
-                    ) {
-                        Icon(if (engine.paused) Icons.Default.PlayArrow else Icons.Default.Pause, "Play/pause", Modifier.size(40.dp))
-                    }
-                    IconButton(onClick = { DjEngine.next() }, enabled = engine.running) {
-                        Icon(Icons.Default.SkipNext, "Mix next", Modifier.size(32.dp))
-                    }
-                    IconButton(onClick = { DjEngine.stop() }, enabled = engine.running) {
-                        Icon(Icons.Default.Stop, "Stop", Modifier.size(32.dp))
-                    }
-                }
-                Text(
-                    when (settings.style) {
-                        TransitionStyle.DJ_FADE -> "DJ fade · ${settings.fadeOutSec}s out / ${settings.fadeInSec}s in"
-                        TransitionStyle.SPOTIFY_CROSSFADE -> "Spotify crossfade mode" + (engine.crossfadeInfo?.let { " · $it" } ?: "")
-                    } + " · " + if (settings.mode == PlayMode.SHUFFLE) "shuffle" else "in order",
-                    style = MaterialTheme.typography.labelSmall, color = Color.Gray,
-                )
-                Spacer(Modifier.height(16.dp))
-                if (engine.upNext.isNotEmpty()) {
-                    Text("Up next", style = MaterialTheme.typography.titleMedium, modifier = Modifier.fillMaxWidth())
-                    HorizontalDivider(Modifier.padding(vertical = 6.dp))
-                }
-            }
-            itemsIndexed(engine.upNext) { i, label ->
-                Text(
-                    label,
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable { DjEngine.playUpcoming(i) }
-                        .padding(vertical = 10.dp),
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                )
-            }
-            item { Spacer(Modifier.height(24.dp)) }
-        }
-    }
-}
-
-@Composable
-private fun MixProgress(engine: DjEngine.State) {
-    val dur = engine.durationMs.coerceAtLeast(1)
-    val progress = (engine.positionMs.toFloat() / dur).coerceIn(0f, 1f)
-    val mix = (engine.mixPointMs.toFloat() / dur).coerceIn(0f, 1f)
-    Column(Modifier.fillMaxWidth()) {
-        Box(Modifier.fillMaxWidth().height(6.dp)) {
-            LinearProgressIndicator(
-                progress = { progress },
-                modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
-                color = Green,
-                trackColor = Color(0xFF3A3A3A),
-            )
-            if (engine.running && mix > 0f && mix < 1f) {
-                // Marker for where the DJ starts the transition.
-                Row(Modifier.fillMaxWidth()) {
-                    if (mix > 0.001f) Spacer(Modifier.weight(mix))
-                    Box(Modifier.width(3.dp).height(6.dp).background(Color(0xFFB388FF)))
-                    Spacer(Modifier.weight((1f - mix).coerceAtLeast(0.001f)))
-                }
-            }
-        }
-        Row(Modifier.fillMaxWidth()) {
-            Text(fmt(engine.positionMs), style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-            Spacer(Modifier.weight(1f))
-            Text(fmt(engine.durationMs), style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-        }
-    }
-}
-
-// ------------------------------------------------------------------ settings
-
-@Composable
-private fun SettingsScreen(onBack: () -> Unit) {
-    val s by AppState.settings.collectAsState()
-    val update: (MixSettings) -> Unit = { AppState.updateSettings(it) }
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Mix settings") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
-            )
-        },
-    ) { pad ->
-        Column(
-            Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Text("Transition style", style = MaterialTheme.typography.titleMedium)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(
-                    selected = s.style == TransitionStyle.DJ_FADE,
-                    onClick = { update(s.copy(style = TransitionStyle.DJ_FADE)) },
-                    label = { Text("DJ fade") },
-                )
-                FilterChip(
-                    selected = s.style == TransitionStyle.SPOTIFY_CROSSFADE,
-                    onClick = { update(s.copy(style = TransitionStyle.SPOTIFY_CROSSFADE)) },
-                    label = { Text("Spotify crossfade") },
-                )
-            }
-            Text(
-                if (s.style == TransitionStyle.DJ_FADE) {
-                    "The app rides the volume: it fades the track out at the mix point, drops the next track and " +
-                        "fades it in. Works with any Spotify setting."
-                } else {
-                    "The app queues the next track in Spotify so Spotify overlaps them (true crossfade). Turn on " +
-                        "Spotify > Settings > Playback > Crossfade (e.g. 8-12s). Intro skip doesn't apply in this mode."
-                },
-                style = MaterialTheme.typography.bodySmall, color = Color.Gray,
-            )
-            HorizontalDivider(Modifier.padding(vertical = 8.dp))
-            SliderRow("Fade out", s.fadeOutSec, 1..15, "s") { update(s.copy(fadeOutSec = it)) }
-            SliderRow("Fade in", s.fadeInSec, 0..10, "s") { update(s.copy(fadeInSec = it)) }
-            SliderRow("Volume dip during switch", s.floorPct, 0..60, "%") { update(s.copy(floorPct = it)) }
-            SliderRow("Mix out before the end", s.mixOutEarlySec, 0..45, "s") { update(s.copy(mixOutEarlySec = it)) }
-            Text("Cuts long outros: the transition starts this much earlier.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
-            SliderRow("Skip intro of next track", s.skipIntroSec, 0..30, "s") { update(s.copy(skipIntroSec = it)) }
-            Text("Starts the next track a few seconds in, like a DJ cueing past the intro.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
-            HorizontalDivider(Modifier.padding(vertical = 8.dp))
-            Text("Shuffle", style = MaterialTheme.typography.titleMedium)
-            SwitchRow("Avoid the same artist back to back", s.avoidSameArtist) { update(s.copy(avoidSameArtist = it)) }
-            SwitchRow("Alternate between playlists", s.alternatePlaylists) { update(s.copy(alternatePlaylists = it)) }
-            SliderRow("Block size for playlists you don't own", s.blockSize, 1..10, " tracks") { update(s.copy(blockSize = it)) }
-            Text(
-                "Spotify only shares the tracks of playlists you own or collaborate on, so other playlists are " +
-                    "played as blocks of tracks in between.",
-                style = MaterialTheme.typography.bodySmall, color = Color.Gray,
-            )
-            Spacer(Modifier.height(8.dp))
-            OutlinedButton(onClick = { update(MixSettings(mode = s.mode)) }) { Text("Reset to defaults") }
-            Spacer(Modifier.height(24.dp))
-        }
-    }
-}
-
-@Composable
-private fun SliderRow(label: String, value: Int, range: IntRange, unit: String, onChange: (Int) -> Unit) {
-    Column {
-        Row {
-            Text(label, Modifier.weight(1f))
-            Text("$value$unit", color = Green)
-        }
-        Slider(
-            value = value.toFloat(),
-            onValueChange = { onChange(it.roundToInt()) },
-            valueRange = range.first.toFloat()..range.last.toFloat(),
-            steps = (range.last - range.first - 1).coerceAtLeast(0),
-        )
-    }
-}
-
-@Composable
-private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, Modifier.weight(1f))
-        Switch(checked = checked, onCheckedChange = onChange)
     }
 }
