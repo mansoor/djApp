@@ -20,11 +20,17 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
     }
 
+    override fun onStart() {
+        super.onStart()
+        if (AppState.loggedIn.value) DjEngine.connect(this)
+    }
+
     private fun handleIntent(intent: Intent?) {
         val data = intent?.data ?: return
         if (data.scheme == "djapp" && data.host == "callback") {
             intent.data = null
             AppState.handleRedirect(data)
+            DjEngine.connect(this)
         }
     }
 }

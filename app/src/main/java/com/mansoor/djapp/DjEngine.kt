@@ -129,11 +129,11 @@ object DjEngine {
             .build()
         SpotifyAppRemote.connect(ctx, params, object : Connector.ConnectionListener {
             override fun onConnected(r: SpotifyAppRemote) {
-                scope.launch { onConnected(r) }
+                scope.launch { handleConnected(r) }
             }
 
             override fun onFailure(t: Throwable) {
-                scope.launch { if (attempt == connectAttempt || remote != null) onConnectionFailed(t) }
+                scope.launch { if (attempt == connectAttempt || remote != null) handleConnectionFailed(t) }
             }
         })
         scope.launch {
@@ -147,7 +147,7 @@ object DjEngine {
         }
     }
 
-    private fun onConnected(r: SpotifyAppRemote) {
+    private fun handleConnected(r: SpotifyAppRemote) {
         val existing = remote
         if (existing != null && existing !== r && existing.isConnected) {
             // A late answer from an abandoned attempt.
@@ -171,7 +171,7 @@ object DjEngine {
         publish()
     }
 
-    private fun onConnectionFailed(t: Throwable) {
+    private fun handleConnectionFailed(t: Throwable) {
         connecting = false
         remote = null
         val n = t.javaClass.simpleName
