@@ -18,7 +18,8 @@ object MixBuilder {
 
         if (s.mode == PlayMode.SEQUENCE) {
             return deduped.flatMap { (p, tracks) ->
-                tracks?.map { QueueEntry.Track(it) } ?: listOf(QueueEntry.Block(p, maxOf(1, p.total)))
+                // Size unknown (Spotify hides it): play through until Spotify runs out.
+                tracks?.map { QueueEntry.Track(it) } ?: listOf(QueueEntry.Block(p, if (p.total > 0) p.total else 1000))
             }
         }
 

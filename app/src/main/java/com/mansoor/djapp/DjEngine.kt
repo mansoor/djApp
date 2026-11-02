@@ -116,6 +116,11 @@ object DjEngine {
     private var detector: LullDetector? = null
     private var detectorFailed = false
 
+    // Playlists we can't read are played by index: upcoming indices per playlist id, and a
+    // learned upper bound for playlists whose size Spotify hides.
+    private val blockCursor = HashMap<String, ArrayDeque<Int>>()
+    private val blockBound = HashMap<String, Int>()
+
     private val settings: MixSettings get() = AppState.settings.value
 
     fun init(ctx: Context) {
@@ -288,6 +293,8 @@ object DjEngine {
                 sources = loaded
                 customTracks = custom
                 queue.clear()
+                blockCursor.clear()
+                blockBound.clear()
                 queue.addAll(first)
                 index = 0
                 nativeQueued = null
@@ -686,7 +693,7 @@ object DjEngine {
     /** True when Spotify's own next track is the one we want, so its crossfade can do the mix. */
     private fun overlapReady(): Boolean {
         val cur = queue.getOrNull(index) ?: return false
-        if (cur is QueueEntry.Block && blockPlayed + 1 < cur.count) return nativeQueued == null
+        if (cur is QueueEntry.Block && blockPlayed + 1 < cur.count) return nativeQueued == null && mode == PlayMode.SEQUENCE
         val next = queue.getOrNull(index + 1) as? QueueEntry.Track ?: return false
         return nativeQueued == next.track.uri
     }
@@ -813,8 +820,12 @@ object DjEngine {
         }
         if (jumpTo == null && queued == null && entry is QueueEntry.Block && blockPlayed + 1 < entry.count) {
             blockPlayed++
-            r.playerApi.skipNext()
-            return awaitTrack { it != null && it != fromUri }
+            if (mode == PlayMode.SEQUENCE) {
+                blockCursor[entry.playlist.id]?.removeFirstOrNull()
+                r.playerApi.skipNext()
+                return awaitTrack { it != null && it != fromUri }
+            }
+            return playBlockTrack(r, entry.playlist, fromUri)
         }
         if (queued != null) {
             // Something we queued in Spotify is no longer next: play through it while the volume is down.
@@ -839,14 +850,50 @@ object DjEngine {
                 started
             }
             is QueueEntry.Block -> {
-                r.playerApi.setShuffle(mode != PlayMode.SEQUENCE)
-                r.playerApi.play(e.playlist.uri).setErrorCallback { t -> onPlayError(t) }
-                awaitTrack { it != null && it != fromUri }
+                r.playerApi.setShuffle(false)
+                playBlockTrack(r, e.playlist, fromUri)
             }
         }
         ensureAhead()
         if (ok) queueNextNative()
         return ok
+    }
+
+    private fun nextBlockIndex(p: PlaylistInfo): Int {
+        val size = if (p.total > 0) p.total else blockBound.getOrDefault(p.id, 100)
+        val dq = blockCursor.getOrPut(p.id) { ArrayDeque() }
+        if (dq.isEmpty()) {
+            val all = (0 until size.coerceAtLeast(1)).toMutableList()
+            if (mode != PlayMode.SEQUENCE) all.shuffle(rnd)
+            dq.addAll(all)
+        }
+        return dq.removeFirst()
+    }
+
+    /**
+     * Plays one song from a playlist we can't read by jumping to an index in it, so blocks don't
+     * keep restarting the playlist at the same songs. Unknown sizes are probed and shrunk on errors.
+     */
+    private suspend fun playBlockTrack(r: SpotifyAppRemote, p: PlaylistInfo, fromUri: String?): Boolean {
+        repeat(3) {
+            val idx = nextBlockIndex(p)
+            var failed = false
+            r.playerApi.skipToIndex(p.uri, idx).setErrorCallback { failed = true }
+            val end = SystemClock.elapsedRealtime() + 6000
+            while (SystemClock.elapsedRealtime() < end && !failed) {
+                val ps = lastPs
+                val uri = ps?.track?.uri
+                if (uri != null && uri != fromUri && ps?.isPaused == false) return true
+                delay(100)
+            }
+            if (!failed) return false
+            // Probably past the end of a playlist whose size we don't know: shrink and retry.
+            blockBound[p.id] = (if (p.total > 0) p.total else blockBound.getOrDefault(p.id, 100)).coerceAtMost(idx).coerceAtLeast(1)
+            blockCursor.remove(p.id)
+        }
+        r.playerApi.setShuffle(mode != PlayMode.SEQUENCE)
+        r.playerApi.play(p.uri).setErrorCallback { t -> onPlayError(t) }
+        return awaitTrack { it != null && it != fromUri }
     }
 
     /** Keeps the queue endless: append a fresh round when we're near the end. */

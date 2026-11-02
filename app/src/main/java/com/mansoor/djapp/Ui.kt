@@ -547,7 +547,7 @@ fun PlaylistRow(p: PlaylistInfo, checked: Boolean, onToggle: () -> Unit, onOpen:
         Column(Modifier.weight(1f)) {
             Text(p.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
             val sub = buildString {
-                append("${p.total} tracks · ${p.owner}")
+                append(if (p.total > 0) "${p.total} tracks · ${p.owner}" else p.owner)
                 if (!p.readable) append(" · plays in blocks")
             }
             Text(sub, style = MaterialTheme.typography.bodySmall, color = Color.Gray, maxLines = 1)
