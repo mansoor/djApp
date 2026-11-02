@@ -424,17 +424,26 @@ private fun Pads(engine: DjEngine.State) {
             )
             Text("${settings.loopSec}s", color = Green, fontWeight = FontWeight.Bold, modifier = Modifier.width(32.dp))
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.align(Alignment.CenterHorizontally)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.align(Alignment.CenterHorizontally)) {
+            val lenMs = settings.loopSec * 1000L
+            val lastOn = looping && engine.loopBack
+            val nextOn = looping && !engine.loopBack
             FilterChip(
-                selected = looping,
-                onClick = { DjEngine.setLoop(!looping, settings.loopSec * 1000L) },
-                label = { Text(if (looping) "Looping ${engine.loopLenMs / 1000}s" else "Loop ${settings.loopSec}s") },
+                selected = lastOn,
+                onClick = { DjEngine.setLoop(!lastOn, lenMs, back = true) },
+                label = { Text("Loop last ${settings.loopSec}s") },
+                enabled = engine.durationMs > 0,
+            )
+            FilterChip(
+                selected = nextOn,
+                onClick = { DjEngine.setLoop(!nextOn, lenMs, back = false) },
+                label = { Text("Loop next ${settings.loopSec}s") },
                 enabled = engine.durationMs > 0,
             )
             FilterChip(
                 selected = engine.repeatTrack,
                 onClick = { DjEngine.toggleRepeat() },
-                label = { Text("Repeat track") },
+                label = { Text("Repeat") },
             )
         }
     }

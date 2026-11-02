@@ -176,38 +176,45 @@ fun TracksScreen(p: PlaylistInfo, engine: DjEngine.State, onBack: () -> Unit) {
                     )
                     LazyColumn(Modifier.fillMaxSize()) {
                         items(shown, key = { it.uri }) { t ->
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clickable(enabled = engine.running) { DjEngine.playNow(t); toast("Mixing into ${t.name}") }
-                                    .padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Column(Modifier.weight(1f)) {
-                                    Text(t.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
-                                    Text(
-                                        "${t.artist} · ${fmt(t.durationMs)}",
-                                        style = MaterialTheme.typography.bodySmall, color = Color.Gray, maxLines = 1,
-                                    )
-                                }
-                                if (engine.running) {
-                                    Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
-                                        TextButton(onClick = { DjEngine.playNow(t); toast("Mixing into ${t.name}") }, contentPadding = CompactPadding) { Text("Play") }
-                                        TextButton(onClick = { DjEngine.playNext(t); toast("${t.name} plays next") }, contentPadding = CompactPadding) { Text("Next") }
-                                        TextButton(onClick = { DjEngine.addToQueue(t); toast("Added to queue") }, contentPadding = CompactPadding) { Text("+Queue") }
-                                    }
-                                } else {
-                                    val added = t.uri in customUris
-                                    TextButton(
-                                        onClick = { AppState.addCustom(t); toast("Added to custom queue (${custom.size + 1})") },
-                                        enabled = !added,
-                                    ) { Text(if (added) "Added" else "+ Custom") }
-                                }
-                            }
+                            TrackActionRow(t, engine.running, t.uri in customUris)
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+/** A song with DJ actions: Play now / Next / +Queue while mixing, or + Custom before a mix. */
+@Composable
+fun TrackActionRow(t: TrackInfo, running: Boolean, inCustom: Boolean) {
+    val ctx = LocalContext.current
+    fun toast(msg: String) = Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(enabled = running) { DjEngine.playNow(t); toast("Mixing into ${t.name}") }
+            .padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(t.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
+            Text(
+                "${t.artist} · ${fmt(t.durationMs)}",
+                style = MaterialTheme.typography.bodySmall, color = Color.Gray, maxLines = 1,
+            )
+        }
+        if (running) {
+            Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
+                TextButton(onClick = { DjEngine.playNow(t); toast("Mixing into ${t.name}") }, contentPadding = CompactPadding) { Text("Play") }
+                TextButton(onClick = { DjEngine.playNext(t); toast("${t.name} plays next") }, contentPadding = CompactPadding) { Text("Next") }
+                TextButton(onClick = { DjEngine.addToQueue(t); toast("Added to queue") }, contentPadding = CompactPadding) { Text("+Queue") }
+            }
+        } else {
+            TextButton(
+                onClick = { AppState.addCustom(t); toast("Added to custom queue") },
+                enabled = !inCustom,
+            ) { Text(if (inCustom) "Added" else "+ Custom") }
         }
     }
 }

@@ -36,6 +36,68 @@ object AppState {
     /** Songs picked by hand for Custom mode. */
     val customQueue = MutableStateFlow<List<TrackInfo>>(emptyList())
 
+    /** The Spotify account the Web API login belongs to. */
+    val profile = MutableStateFlow<SpotifyApi.Profile?>(null)
+
+    /** Playlists found in search and ticked for the mix (they aren't in the user's library). */
+    val extraPlaylists = MutableStateFlow<List<PlaylistInfo>>(emptyList())
+
+    // Spotify catalog search
+    val searchQuery = MutableStateFlow("")
+    val searchTracks = MutableStateFlow<List<TrackInfo>>(emptyList())
+    val searchPlaylists = MutableStateFlow<List<PlaylistInfo>>(emptyList())
+    val searchLoading = MutableStateFlow(false)
+    val searchHasMore = MutableStateFlow(false)
+    private var searchOffset = 0
+
+    fun search(query: String, more: Boolean = false) {
+        val q = query.trim()
+        if (q.isBlank() || searchLoading.value) return
+        if (!more) {
+            searchQuery.value = q
+            searchOffset = 0
+            searchTracks.value = emptyList()
+            searchPlaylists.value = emptyList()
+        }
+        scope.launch {
+            searchLoading.value = true
+            try {
+                val me = profile.value ?: SpotifyApi.me().also { profile.value = it }
+                val r = SpotifyApi.search(q, searchOffset, me.id)
+                searchOffset += 10
+                searchTracks.value = (searchTracks.value + r.tracks).distinctBy { it.uri }
+                searchPlaylists.value = (searchPlaylists.value + r.playlists).distinctBy { it.id }
+                searchHasMore.value = r.hasMore
+            } catch (e: Exception) {
+                message.value = "Search failed: ${e.message}"
+            } finally {
+                searchLoading.value = false
+            }
+        }
+    }
+
+    fun findPlaylist(id: String): PlaylistInfo? =
+        playlists.value.firstOrNull { it.id == id }
+            ?: extraPlaylists.value.firstOrNull { it.id == id }
+            ?: searchPlaylists.value.firstOrNull { it.id == id }
+
+    /** Everything that can be ticked for the mix: the library plus playlists added from search. */
+    fun selectablePlaylists(): List<PlaylistInfo> = playlists.value + extraPlaylists.value
+
+    /** Tick/untick a playlist; ones from search are remembered so they can be mixed. */
+    fun toggleSelect(p: PlaylistInfo) {
+        val inLibrary = playlists.value.any { it.id == p.id }
+        val nowSelected = p.id !in selected.value
+        toggle(p.id)
+        if (!inLibrary) {
+            extraPlaylists.value = if (nowSelected) {
+                (extraPlaylists.value + p).distinctBy { it.id }
+            } else {
+                extraPlaylists.value.filter { it.id != p.id }
+            }
+        }
+    }
+
     fun checkLastProblem(ctx: Context) {
         val app = ctx.applicationContext
         scope.launch {
@@ -61,7 +123,9 @@ object AppState {
         scope.launch {
             loadingPlaylists.value = true
             try {
-                playlists.value = SpotifyApi.playlists()
+                val me = SpotifyApi.me()
+                profile.value = me
+                playlists.value = SpotifyApi.playlists(me.id)
                 trackCache.value = emptyMap()
             } catch (e: Exception) {
                 message.value = "Couldn't load playlists: ${e.message}"
@@ -130,6 +194,8 @@ object AppState {
         SpotifyAuth.logout()
         playlists.value = emptyList()
         trackCache.value = emptyMap()
+        profile.value = null
+        extraPlaylists.value = emptyList()
         loggedIn.value = false
     }
 }

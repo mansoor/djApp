@@ -12,8 +12,10 @@ android {
         applicationId = "com.mansoor.djapp"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        // CI builds match the GitHub release tag (v1.0.<run number>).
+        val runNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
+        versionCode = runNumber ?: 1
+        versionName = if (runNumber != null) "1.0.$runNumber" else "1.0-dev"
     }
 
     // Fixed signing key committed to the repo so the SHA1 registered in the

@@ -4,6 +4,7 @@ package com.mansoor.djapp
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -35,12 +36,16 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.content.pm.PackageInfoCompat
 import kotlin.math.roundToInt
 
 @Composable
@@ -174,9 +179,55 @@ fun SettingsScreen(onBack: () -> Unit) {
             )
             Spacer(Modifier.height(8.dp))
             OutlinedButton(onClick = { update(MixSettings(mode = s.mode)) }) { Text("Reset to defaults") }
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            AboutSection(engine)
             Spacer(Modifier.height(24.dp))
         }
     }
+}
+
+/** App, SDK, device and Spotify account details, with a copy button for bug reports. */
+@Composable
+private fun AboutSection(engine: DjEngine.State) {
+    val ctx = LocalContext.current
+    val profile by AppState.profile.collectAsState()
+    val clipboard = LocalClipboardManager.current
+    val rows = remember(profile, engine.connected, engine.detectedCrossfadeMs) {
+        val pm = ctx.packageManager
+        val app = runCatching { pm.getPackageInfo(ctx.packageName, 0) }.getOrNull()
+        val spotify = runCatching { pm.getPackageInfo("com.spotify.music", 0) }.getOrNull()
+        val clientId = Prefs.clientId
+        listOf(
+            "App version" to (app?.let { "${it.versionName} (build ${PackageInfoCompat.getLongVersionCode(it)})" } ?: "unknown"),
+            "Spotify account" to (profile?.let { "${it.name} (${it.id})" } ?: "not loaded yet"),
+            "Spotify app" to (spotify?.versionName?.let { "installed, version $it" } ?: "not installed"),
+            "Spotify app connection" to (if (engine.connected) "connected" else "not connected"),
+            "Spotify App Remote SDK" to "0.8.0",
+            "Spotify Web API" to "v1, Authorization Code + PKCE",
+            "Spotify crossfade (reported)" to when {
+                engine.detectedCrossfadeMs > 0 -> "${engine.detectedCrossfadeMs / 1000}s"
+                engine.detectedCrossfadeMs == 0 -> "off"
+                else -> "unknown"
+            },
+            "Client ID" to (if (clientId.length > 8) clientId.take(4) + "…" + clientId.takeLast(4) else clientId.ifBlank { "not set" }),
+            "Redirect URI" to SpotifyAuth.REDIRECT_URI,
+            "Package" to ctx.packageName,
+            "Android" to "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}), target API ${ctx.applicationInfo.targetSdkVersion}",
+            "Device" to "${Build.MANUFACTURER} ${Build.MODEL}",
+        )
+    }
+    Section("About")
+    rows.forEach { (label, value) ->
+        Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+            Text(label, Modifier.weight(0.45f), style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+            Text(value, Modifier.weight(0.55f), style = MaterialTheme.typography.bodySmall)
+        }
+    }
+    TextButton(onClick = {
+        clipboard.setText(AnnotatedString(rows.joinToString("\n") { "${it.first}: ${it.second}" }))
+        Toast.makeText(ctx, "Copied", Toast.LENGTH_SHORT).show()
+    }) { Text("Copy info") }
 }
 
 @Composable

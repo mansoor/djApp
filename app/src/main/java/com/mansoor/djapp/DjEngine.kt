@@ -58,6 +58,7 @@ object DjEngine {
         val detectedCrossfadeMs: Int = -1,
         val loopLenMs: Long = 0,
         val loopStartMs: Long = 0,
+        val loopBack: Boolean = false,
         val repeatTrack: Boolean = false,
         val smartInfo: String? = null,
     )
@@ -102,6 +103,7 @@ object DjEngine {
     private var manualMix: Long? = null
     private var loopLen = 0L
     private var loopStart = 0L
+    private var loopBack = false
     private var repeatTrack = false
 
     private var lastPs: PlayerState? = null
@@ -413,22 +415,33 @@ object DjEngine {
         publish()
     }
 
-    /** Loop the next [lenMs] from the current position, or stop looping. */
-    fun setLoop(on: Boolean, lenMs: Long) {
+    /**
+     * Start or stop a loop. [back] = false loops the next [lenMs] from here; [back] = true jumps
+     * back [lenMs] and loops up to the current position.
+     */
+    fun setLoop(on: Boolean, lenMs: Long, back: Boolean = false) {
         val dur = lastPs?.track?.duration ?: return
         if (!on) {
             loopLen = 0
         } else {
+            val pos = estimatedPosition()
             loopLen = lenMs
-            loopStart = estimatedPosition().coerceAtMost(dur - lenMs - 1500).coerceAtLeast(0)
+            loopBack = back
+            if (back) {
+                loopStart = (pos - lenMs).coerceAtLeast(0)
+                seekLocal(loopStart)
+            } else {
+                loopStart = pos.coerceAtMost(dur - lenMs - 1500).coerceAtLeast(0)
+            }
         }
         publish()
     }
 
-    /** Change the length of a running loop, keeping where it starts. */
+    /** Change the length of a running loop: "next" loops keep their start, "last" loops keep their end. */
     fun setLoopLength(lenMs: Long) {
         val dur = lastPs?.track?.duration ?: return
         if (loopLen <= 0) return
+        loopStart = if (loopBack) (loopStart + loopLen - lenMs).coerceAtLeast(0) else loopStart
         loopLen = lenMs
         loopStart = loopStart.coerceAtMost(dur - lenMs - 1500).coerceAtLeast(0)
         publish()
@@ -932,6 +945,7 @@ object DjEngine {
             detectedCrossfadeMs = detectedCrossfadeMs,
             loopLenMs = loopLen,
             loopStartMs = loopStart,
+            loopBack = loopBack,
             repeatTrack = repeatTrack,
             smartInfo = smartInfo,
         )

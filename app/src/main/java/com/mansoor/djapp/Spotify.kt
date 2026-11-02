@@ -156,9 +156,52 @@ object SpotifyApi {
     private fun JSONObject.nextUrl(): String? =
         if (isNull("next")) null else optString("next").ifBlank { null }
 
-    suspend fun playlists(): List<PlaylistInfo> {
-        val me = get("/me")
-        val myId = me.optString("id")
+    data class Profile(val id: String, val name: String)
+
+    data class SearchResults(val tracks: List<TrackInfo>, val playlists: List<PlaylistInfo>, val hasMore: Boolean)
+
+    suspend fun me(): Profile {
+        val j = get("/me")
+        val id = j.optString("id")
+        return Profile(id, j.optString("display_name").ifBlank { id })
+    }
+
+    private fun parsePlaylist(p: JSONObject, myId: String): PlaylistInfo {
+        val owner = p.optJSONObject("owner")
+        val ownerId = owner?.optString("id") ?: ""
+        val total = (p.optJSONObject("items") ?: p.optJSONObject("tracks"))?.optInt("total", 0) ?: 0
+        return PlaylistInfo(
+            id = p.optString("id"),
+            uri = p.optString("uri"),
+            name = p.optString("name"),
+            imageUrl = p.optJSONArray("images")?.optJSONObject(0)?.optString("url"),
+            owner = if (ownerId == myId) "You" else (owner?.optString("display_name")?.ifBlank { null } ?: ownerId),
+            total = total,
+            readable = ownerId == myId || p.optBoolean("collaborative"),
+        )
+    }
+
+    private fun parseTrack(t: JSONObject, source: String): TrackInfo? {
+        val uri = t.optString("uri")
+        if (!uri.startsWith("spotify:track:") && !uri.startsWith("spotify:episode:")) return null
+        val artists = t.optJSONArray("artists")
+        val names = mutableListOf<String>()
+        if (artists != null) {
+            for (a in 0 until artists.length()) {
+                artists.optJSONObject(a)?.optString("name")?.let { names += it }
+            }
+        }
+        return TrackInfo(
+            uri = uri,
+            name = t.optString("name"),
+            artist = names.joinToString(", ").ifBlank { t.optJSONObject("show")?.optString("name") ?: "" },
+            artistKey = (names.firstOrNull() ?: "").lowercase(),
+            durationMs = t.optLong("duration_ms"),
+            source = source,
+        )
+    }
+
+    suspend fun playlists(myId: String): List<PlaylistInfo> {
         val likedTotal = runCatching { get("/me/tracks?limit=1").optInt("total", 0) }.getOrDefault(0)
         val out = mutableListOf(
             PlaylistInfo(LIKED_ID, "spotify:user:$myId:collection", "Liked Songs", null, "You", likedTotal, true)
@@ -170,23 +213,38 @@ object SpotifyApi {
             if (items != null) {
                 for (i in 0 until items.length()) {
                     val p = items.optJSONObject(i) ?: continue
-                    val owner = p.optJSONObject("owner")
-                    val ownerId = owner?.optString("id") ?: ""
-                    val total = (p.optJSONObject("items") ?: p.optJSONObject("tracks"))?.optInt("total", 0) ?: 0
-                    out += PlaylistInfo(
-                        id = p.optString("id"),
-                        uri = p.optString("uri"),
-                        name = p.optString("name"),
-                        imageUrl = p.optJSONArray("images")?.optJSONObject(0)?.optString("url"),
-                        owner = if (ownerId == myId) "You" else (owner?.optString("display_name") ?: ownerId),
-                        total = total,
-                        readable = ownerId == myId || p.optBoolean("collaborative"),
-                    )
+                    out += parsePlaylist(p, myId)
                 }
             }
             next = j.nextUrl()
         }
         return out
+    }
+
+    /** Searches the whole Spotify catalog for songs and playlists (Spotify caps a page at 10). */
+    suspend fun search(query: String, offset: Int, myId: String): SearchResults {
+        val q = URLEncoder.encode(query, "UTF-8")
+        val j = get("/search?q=$q&type=track,playlist&limit=10&offset=$offset")
+        val tracks = mutableListOf<TrackInfo>()
+        val playlists = mutableListOf<PlaylistInfo>()
+        val tj = j.optJSONObject("tracks")
+        val pj = j.optJSONObject("playlists")
+        val tArr = tj?.optJSONArray("items")
+        if (tArr != null) {
+            for (i in 0 until tArr.length()) {
+                val t = tArr.optJSONObject(i) ?: continue
+                parseTrack(t, "Search")?.let { tracks += it }
+            }
+        }
+        val pArr = pj?.optJSONArray("items")
+        if (pArr != null) {
+            for (i in 0 until pArr.length()) {
+                val p = pArr.optJSONObject(i) ?: continue
+                playlists += parsePlaylist(p, myId)
+            }
+        }
+        val more = (tj?.nextUrl() != null) || (pj?.nextUrl() != null)
+        return SearchResults(tracks, playlists, more)
     }
 
     /** Returns the playlist's tracks, or null if Spotify won't let us read them. */
@@ -214,23 +272,7 @@ object SpotifyApi {
                 val entry = items.optJSONObject(i) ?: continue
                 if (entry.optBoolean("is_local")) continue
                 val t = entry.optJSONObject("item") ?: entry.optJSONObject("track") ?: continue
-                val uri = t.optString("uri")
-                if (!uri.startsWith("spotify:track:") && !uri.startsWith("spotify:episode:")) continue
-                val artists = t.optJSONArray("artists")
-                val names = mutableListOf<String>()
-                if (artists != null) {
-                    for (a in 0 until artists.length()) {
-                        artists.optJSONObject(a)?.optString("name")?.let { names += it }
-                    }
-                }
-                out += TrackInfo(
-                    uri = uri,
-                    name = t.optString("name"),
-                    artist = names.joinToString(", ").ifBlank { t.optJSONObject("show")?.optString("name") ?: "" },
-                    artistKey = (names.firstOrNull() ?: "").lowercase(),
-                    durationMs = t.optLong("duration_ms"),
-                    source = p.name,
-                )
+                parseTrack(t, p.name)?.let { out += it }
             }
             next = j.nextUrl()
         }

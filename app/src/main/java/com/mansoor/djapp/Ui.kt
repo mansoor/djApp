@@ -32,17 +32,21 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.AlertDialog
@@ -84,6 +88,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -251,7 +256,7 @@ private fun MainScreen(activity: ComponentActivity) {
 
     val startMix: () -> Unit = {
         val sel = AppState.selected.value
-        DjEngine.start(playlists.filter { it.id in sel }, AppState.customQueue.value)
+        DjEngine.start(AppState.selectablePlaylists().filter { it.id in sel }, AppState.customQueue.value)
         stack = listOf("library", "player")
     }
     val notifPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { startMix() }
@@ -269,8 +274,9 @@ private fun MainScreen(activity: ComponentActivity) {
         screen == "settings" -> SettingsScreen(onBack = pop)
         screen == "player" -> PlayerScreen(engine, onBack = pop, onSettings = { push("settings") }, onQueue = { push("queue") })
         screen == "queue" -> QueueScreen(engine, onBack = pop, onBrowse = { stack = listOf("library") })
+        screen == "search" -> SearchScreen(engine, onBack = pop, onOpenPlaylist = { push("tracks:${it.id}") })
         screen.startsWith("tracks:") -> {
-            val p = playlists.firstOrNull { it.id == screen.removePrefix("tracks:") }
+            val p = AppState.findPlaylist(screen.removePrefix("tracks:"))
             if (p == null) pop() else TracksScreen(p, engine, onBack = pop)
         }
         else -> LibraryScreen(
@@ -279,6 +285,10 @@ private fun MainScreen(activity: ComponentActivity) {
             onSettings = { push("settings") },
             onOpenPlaylist = { push("tracks:${it.id}") },
             onQueue = { push("queue") },
+            onSearch = { q ->
+                AppState.search(q)
+                push("search")
+            },
         )
     }
 }
@@ -295,8 +305,12 @@ private fun LibraryScreen(
     onSettings: () -> Unit,
     onOpenPlaylist: (PlaylistInfo) -> Unit,
     onQueue: () -> Unit,
+    onSearch: (String) -> Unit,
 ) {
     val playlists by AppState.playlists.collectAsState()
+    val extra by AppState.extraPlaylists.collectAsState()
+    var query by rememberSaveable { mutableStateOf("") }
+    val shown = if (query.isBlank()) playlists else playlists.filter { it.name.contains(query.trim(), ignoreCase = true) }
     val loading by AppState.loadingPlaylists.collectAsState()
     val selected by AppState.selected.collectAsState()
     val settings by AppState.settings.collectAsState()
@@ -357,7 +371,7 @@ private fun LibraryScreen(
                         TextButton(onClick = onQueue) { Text("Edit custom queue") }
                     }
                     Spacer(Modifier.weight(1f))
-                    val count = playlists.count { it.id in selected }
+                    val count = (playlists + extra).count { it.id in selected }
                     val canStart = (count > 0 || (settings.mode == PlayMode.CUSTOM && custom.isNotEmpty())) &&
                         engine.connected && !engine.loading
                     Button(onClick = onStart, enabled = canStart) {
@@ -374,19 +388,71 @@ private fun LibraryScreen(
         LazyColumn(Modifier.padding(pad).fillMaxSize()) {
             item { ConnectionBanner(activity, engine) }
             item {
-                Text(
-                    "Tick playlists to mix. Tap a playlist to see its songs and add or play any of them.",
-                    style = MaterialTheme.typography.bodySmall, color = Color.Gray,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    leadingIcon = { Icon(Icons.Default.Search, null) },
+                    trailingIcon = {
+                        if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Default.Close, "Clear") }
+                    },
+                    placeholder = { Text("Search your playlists or Spotify") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { if (query.isNotBlank()) onSearch(query) }),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                 )
+            }
+            if (query.isNotBlank()) {
+                item {
+                    TextButton(
+                        onClick = { onSearch(query) },
+                        modifier = Modifier.padding(horizontal = 8.dp),
+                    ) { Text("Search Spotify for songs and playlists: \"${query.trim()}\"") }
+                }
+            } else {
+                item {
+                    Text(
+                        "Tick playlists to mix. Tap a playlist to see its songs and add or play any of them.",
+                        style = MaterialTheme.typography.bodySmall, color = Color.Gray,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    )
+                }
+            }
+            if (query.isBlank() && extra.isNotEmpty()) {
+                item {
+                    Text(
+                        "Added from search",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    )
+                }
+                items(extra, key = { "extra:${it.id}" }) { p ->
+                    PlaylistRow(p, p.id in selected, onToggle = { AppState.toggleSelect(p) }, onOpen = { onOpenPlaylist(p) })
+                }
+                item {
+                    Text(
+                        "Your playlists",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    )
+                }
             }
             if (loading && playlists.isEmpty()) {
                 item {
                     Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
                 }
             }
-            items(playlists, key = { it.id }) { p ->
-                PlaylistRow(p, p.id in selected, onToggle = { AppState.toggle(p.id) }, onOpen = { onOpenPlaylist(p) })
+            items(shown, key = { it.id }) { p ->
+                PlaylistRow(p, p.id in selected, onToggle = { AppState.toggleSelect(p) }, onOpen = { onOpenPlaylist(p) })
+            }
+            if (query.isNotBlank() && shown.isEmpty()) {
+                item {
+                    Text(
+                        "None of your playlists match.",
+                        color = Color.Gray,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                }
             }
         }
     }
@@ -454,7 +520,7 @@ fun openSpotify(ctx: Context) {
 }
 
 @Composable
-private fun PlaylistRow(p: PlaylistInfo, checked: Boolean, onToggle: () -> Unit, onOpen: () -> Unit) {
+fun PlaylistRow(p: PlaylistInfo, checked: Boolean, onToggle: () -> Unit, onOpen: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
