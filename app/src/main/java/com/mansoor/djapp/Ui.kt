@@ -102,9 +102,9 @@ private val DjColors = darkColorScheme(
     primary = Green,
     onPrimary = Color.Black,
     secondary = Purple,
-    background = Color(0xFF121212),
-    surface = Color(0xFF121212),
-    surfaceVariant = Color(0xFF242424),
+    background = Color(0xFF0F0B18),
+    surface = Color(0xFF0F0B18),
+    surfaceVariant = Color(0xFF1D1629),
 )
 
 fun fmt(ms: Long): String {
